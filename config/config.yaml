@@ -1,0 +1,68 @@
+defaults:
+  - model: model
+
+dataset:
+  splits_path: dataset/dataset_tcga_kits.json
+  fold: 0
+  batch_size: 32
+  num_workers: 24
+  augment: true
+  image_key: ct
+
+ldm:
+  num_train_steps: 1000
+  beta_schedule: linear         # linear | cosine
+  beta_start: 1.0e-4
+  beta_end: 2.0e-2
+  prediction_type: epsilon      # epsilon | x0 | v
+  latent_scale: 1.0             # set to 0.18215 if you want SD-style scaling
+  freeze_autoencoder: true
+  ema_decay: 0.0                # e.g., 0.9999 to enable EMA
+  log_image_interval: 5
+  label_key: label              # optional, if your dataloader provides class labels
+
+trainer:
+  training_mode: vae    # Options: vae, gan, classifier
+  max_epochs: 1000
+  checkpoint_dir: checkpoints/
+  device: cuda
+  use_dataparallel: true        # Use DataParallel for multi-GPU training
+  use_amp: true                 # if you want AMP for speed
+  log_image_every_n_steps: 200  # optional step-wise preview
+  monitor_metric: val_loss          # Metric to monitor for best model
+  
+  # TensorBoard organization
+  # By default: creates outputs/YYYY-MM-DD/HH-MM-SS/ with ONE event file containing all metrics
+  experiment_name: null         # Optional: descriptive name for this run (logged as metadata)
+
+scheduler:
+  name: CosineAnnealingLR
+  T_max: 1000
+  eta_min: 1e-6
+
+loss:
+  lpips_net: alex
+  lpips_max_slices: 8
+  lpips_min_step: 1
+
+optimizer:
+  name: AdamW
+  lr: 1e-3
+  lr_g: 5e-5
+  lr_d: 1e-4    
+  lr_unet: 0.0001
+  betas: [0.9, 0.999] 
+  weight_decay: 0.0
+
+loss_weights:
+  recon: 1.0
+  perceptual: 0.25
+  adversarial: 0.05
+  feature_matching: 0.0
+  kl: 1
+
+gan:
+  type: hinge_sn # hinge_sn, wgan-gp
+  lambda_gp: 10.0
+  n_critic: 5
+  spectral_norm: false

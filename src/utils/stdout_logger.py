@@ -85,6 +85,11 @@ def setup_stdout_logging(filter_stderr_tqdm: bool = True) -> None:
     stdout_logger = logging.getLogger('STDOUT')
     stderr_logger = logging.getLogger('STDERR')
     
+    # Prevent propagation to avoid duplicate console output
+    # (Hydra's root logger already has console handlers)
+    stdout_logger.propagate = False
+    stderr_logger.propagate = False
+    
     # Redirect stdout - capture everything
     sys.stdout = StreamToLogger(
         stdout_logger, 

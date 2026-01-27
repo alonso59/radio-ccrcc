@@ -1,0 +1,106 @@
+# -----------------------------------------------------------------------------
+# INPUT/OUTPUT PATHS
+# -----------------------------------------------------------------------------
+
+
+# Dataset ID (nnUNet-like) - auto-derives OUTPUT_DIR if not set
+DATASET_ID: 420
+OUTPUT_BASE: "data/dataset"  # Base folder for datasets
+# OUTPUT_DIR: "data/dataset/tcga_kirc_tumor/"  # Deprecated - use DATASET_ID instead
+
+IMAGE_FOLDER: "data/dataset/Dataset420/ukb25_nii/"
+MASK_FOLDER: "data/dataset/Dataset420/ukb25_seg/"
+
+# Input format: 'auto', 'nifti', 'npy'
+INPUT_FORMAT: "auto"
+
+# File suffixes for matching image-mask pairs
+IMAGE_SUFFIX: "_0000.nii.gz"
+MASK_SUFFIX: ".nii.gz"
+
+# Class filter: which subfolders to process
+# Options:
+#   null or [] - process all subfolders found
+#   ["NG"] - process only NG subfolder
+#   ["A", "B", "C"] - process multiple subfolders
+CLASS_FILTER: null  # null = all classes
+
+# -----------------------------------------------------------------------------
+# OUTPUT OPTIONS
+# -----------------------------------------------------------------------------
+SAVE_MASK: true              # Save mask arrays (uint8)
+SAVE_SEGMENTATION: true      # Save masked CT images (float32)
+SAVE_IMAGES: true
+# -----------------------------------------------------------------------------
+# PROCESSING PARAMETERS
+# -----------------------------------------------------------------------------
+# Target voxel spacing in mm [x, y, z]
+TARGET_SPACING: [1.0, 1.0, 1.0]
+
+# Expansion margin around kidney bounding box (mm)
+EXPANSION_MM: 1.0
+
+# Minimum VOI size in voxels [x, y, z]
+MIN_VOI_SIZE: [128, 128, 128]
+
+# Convert to RAS+ canonical orientation
+USE_RAS_ORIENTATION: true
+
+# Default spacing for .npy inputs (if no metadata available)
+DEFAULT_NPY_SPACING: [1.0, 1.0, 1.0]
+
+# -----------------------------------------------------------------------------
+# LABEL CONFIGURATION
+# -----------------------------------------------------------------------------
+# Label definitions
+LABELS:
+  1: "kidney"
+  2: "tumor"
+  3: "cyst"
+
+# Labels used for computing bounding box (kidney separation)
+BBOX_LABELS: [2]
+
+# Labels to keep in segmentation output (null = all non-zero labels)
+MASK_LABELS: [2]
+# MASK_LABELS: [2]  # Example: tumor only
+
+# -----------------------------------------------------------------------------
+# QUALITY FILTERS
+# -----------------------------------------------------------------------------
+# Minimum number of kidney voxels (0 = no filter)
+MIN_KIDNEY_VOXELS: 20000
+
+# Minimum number of tumor voxels (0 = no filter)
+MIN_TUMOR_VOXELS: 100
+
+# -----------------------------------------------------------------------------
+# EDGE CASE VALIDATION
+# -----------------------------------------------------------------------------
+# Margin in voxels to detect boundary contact
+BOUNDARY_MARGIN: 5
+
+# Expected HU range for soft tissue
+HU_RANGE: [-200, 300]
+
+# -----------------------------------------------------------------------------
+# PATIENT ID EXTRACTION
+# -----------------------------------------------------------------------------
+# Regex pattern to extract patient ID from case name
+# Supports multiple dataset formats:
+#   - UKB25/KiTS: "00_case_00002" -> extracts "case_00002" (removes scan prefix)
+#   - TCGA: "TCGA-XX-YYYY" -> extracts "TCGA-XX-YYYY"
+# Pattern uses alternation (|) with groups - first non-None group is used
+PATIENT_ID_PATTERN: "(?:\\d{2}_)?(case_\\d{5})|^(TCGA-[A-Z0-9]+-[A-Z0-9]+)"
+
+# -----------------------------------------------------------------------------
+# DATA SPLITS GENERATION
+# -----------------------------------------------------------------------------
+# Number of cross-validation folds
+N_FOLDS: 5
+
+# Test set ratio (0.0-1.0)
+TEST_RATIO: 0.1
+
+# Random seed for reproducibility
+RANDOM_SEED: 42

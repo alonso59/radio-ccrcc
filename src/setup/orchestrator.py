@@ -5,9 +5,9 @@ Follows Facade Pattern and Single Responsibility Principle.
 from omegaconf import DictConfig, OmegaConf
 
 from .config_manager import ConfigManager
-from .setup_builder import SetupBuilderDirector, TrainingSetup
+from .setup_builder import SetupBuilderDirector
 from ..utils.stdout_logger import setup_stdout_logging
-
+import logging
 
 class TrainingOrchestrator:
     """
@@ -34,16 +34,16 @@ class TrainingOrchestrator:
     
     def _display_configuration(self) -> None:
         """Display training configuration."""
-        print("=" * 80)
-        print("Training Configuration")
-        print("=" * 80)
-        print(OmegaConf.to_yaml(self.cfg))
-        print("=" * 80)
+        logging.info("=" * 80)
+        logging.info("Training Configuration")
+        logging.info("=" * 80)
+        logging.info(OmegaConf.to_yaml(self.cfg))
+        logging.info("=" * 80)
     
     def prepare_training(self) -> None:
         """Prepare all training components."""
         training_mode = self.config_manager.get_training_mode()
-        print(f"\n🚀 Starting training in '{training_mode}' mode...\n")
+        logging.info(f"\n🚀 Starting training in '{training_mode}' mode...\n")
         
         # Build training setup using director
         director = SetupBuilderDirector(self.cfg, self.config_manager)
@@ -56,11 +56,11 @@ class TrainingOrchestrator:
         
         try:
             self.setup.trainer.fit()
-            print("\n✅ Training completed successfully!")
+            logging.info("\n✅ Training completed successfully!")
         except KeyboardInterrupt:
-            print("\n⚠️  Training interrupted by user")
+            logging.info("\n⚠️  Training interrupted by user")
         except Exception as e:
-            print(f"\n❌ Training failed with error: {e}")
+            logging.info(f"\n❌ Training failed with error: {e}")
             raise
         finally:
             self._cleanup()

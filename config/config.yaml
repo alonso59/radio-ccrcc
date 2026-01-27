@@ -2,10 +2,10 @@ defaults:
   - model: model
 
 dataset:
-  splits_path: dataset/dataset_tcga_kits.json
+  splits_path: data/dataset/Dataset320/voi/splits_images.json
   fold: 0
   batch_size: 32
-  num_workers: 24
+  num_workers: 12
   augment: true
   image_key: ct
 
@@ -59,7 +59,7 @@ loss_weights:
   perceptual: 0.25
   adversarial: 0.05
   feature_matching: 0.0
-  kl: 1
+  kl: 0.1
 
 gan:
   type: hinge_sn # hinge_sn, wgan-gp

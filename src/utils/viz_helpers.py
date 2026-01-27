@@ -5,13 +5,13 @@ import torch
 import matplotlib.pyplot as plt
 from typing import Optional, List, Tuple
 from matplotlib.figure import Figure
-
+import logging
 
 # ========================== Volume Visualization ==========================
 
 def create_volume_mosaic(
     volume: torch.Tensor, 
-    grid_size: int = 4, 
+    grid_size: int = 6, 
     max_slices: int = 64, 
     center_based: bool = True
 ) -> torch.Tensor:
@@ -27,7 +27,17 @@ def create_volume_mosaic(
     Returns:
         Mosaic image tensor [H*grid_size, W*grid_size]
     """
-    D, H, W = volume.shape
+    # assert volume.ndim == 3, f"Input volume must be 3D tensor [D, H, W], actual shape: {volume.shape}"
+    if volume.ndim == 3:
+        D, H, W = volume.shape
+    elif volume.ndim == 4 and volume.shape[0] == 1:
+        D, H, W = volume[0].shape
+        volume = volume[0]
+    elif volume.ndim == 5 and volume.shape[0] == 1 and volume.shape[1] == 1:
+        D, H, W = volume[0, 0].shape
+        volume = volume[0, 0]
+    else:
+        raise ValueError(f"Input volume must be 3D tensor [D, H, W] or 5D [1, 1, D, H, W], actual shape: {volume.shape}")
     n_slices = min(max_slices, D)
     total_slots = grid_size * grid_size
     
@@ -72,14 +82,20 @@ def create_reconstruction_figure(
     Create volume reconstruction comparison figure.
     
     Args:
-        x: Input volume [D, H, W] (IQR-normalized)
-        x_hat: Reconstructed volume [D, H, W] (IQR-normalized)
+        x: Input volume [D, H, W] or [1, D, H, W] (IQR-normalized)
+        x_hat: Reconstructed volume [D, H, W] or [1, D, H, W] (IQR-normalized)
         norm_stats: Normalization statistics dict with keys: median, iqr
                     If provided, denormalizes to HU space for visualization
         
     Returns:
         Matplotlib figure with mosaics (top row) and middle slice comparison (bottom row)
     """
+    # Handle 4D inputs by squeezing channel dimension
+    if x.ndim == 4 and x.shape[0] == 1:
+        x = x[0]
+    if x_hat.ndim == 4 and x_hat.shape[0] == 1:
+        x_hat = x_hat[0]
+    
     # Denormalize to HU space if stats available
     if norm_stats is not None:
         iqr = norm_stats['iqr']
@@ -142,7 +158,6 @@ def create_reconstruction_figure(
     im_mid = ax5.imshow(diff_mid, cmap="jet", vmin=0, vmax=diff_mid_vmax)
     ax5.axis("off")
     fig.colorbar(im_mid, ax=ax5, fraction=0.046, pad=0.04)
-    plt.tight_layout()
     return fig
 
 
@@ -386,15 +401,14 @@ def create_umap_figure(
     B = all_latents.shape[0]
     latents_flat = all_latents.reshape(B, -1)
     
-    print(f"Running UMAP on {B} samples with {latents_flat.shape[1]} dimensions...")
+    logging.info(f"Running UMAP on {B} samples with {latents_flat.shape[1]} dimensions...")
     
     # Fit UMAP
     reducer = UMAP(
         n_neighbors=n_neighbors,
         min_dist=min_dist,
         n_components=2,
-        metric=metric,
-        random_state=42
+        metric=metric
     )
     embedding = reducer.fit_transform(latents_flat)
     

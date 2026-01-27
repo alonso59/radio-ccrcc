@@ -8,7 +8,7 @@ import torch
 from torch.utils.tensorboard.writer import SummaryWriter
 import numpy as np
 
-from utils import viz_helpers
+from . import viz_helpers
 
 
 class TensorBoardLogger:

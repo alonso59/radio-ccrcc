@@ -5,15 +5,12 @@ import torch
 import torch.nn.functional as F
 from torch.cuda.amp import autocast, GradScaler
 from omegaconf import DictConfig
-from pytorch_msssim import ssim
 
 from .base_trainer import BaseTrainer
 from .loss import ELBOLoss, Perceptual
 from ..dataloader.dataloader import map_label_to_category
-from models.discriminator import MultiScaleDiscriminator
+from ..models.discriminator import MultiScaleDiscriminator
 from monai.losses.adversarial_loss import PatchAdversarialLoss
-from src.dataloader.augmentations import P_LOW, P_HIGH
-
 
 class AdversarialAutoencoderTrainer(BaseTrainer):
     """Trainer for adversarial autoencoder combining reconstruction, KL, adversarial, and perceptual losses."""

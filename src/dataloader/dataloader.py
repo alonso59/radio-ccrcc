@@ -14,45 +14,72 @@ from omegaconf import DictConfig
 from src.dataloader.augmentations import train_augmentations, val_augmentations
 import os
 from torch.utils.data import DataLoader
+from tqdm import tqdm
+
 logger = logging.getLogger(__name__)
 
-def extract_iterative_statistics(dataloader: DataLoader):
-    """
-    Compute dataset-wide intensity statistics iteratively.
+def extract_iterative_statistics(dataloader: DataLoader, hu_min: float = -200.0, hu_max: float = 300.0):
+    # """
+    # Compute dataset-wide intensity statistics iteratively for voxels within target HU range.
     
-    Args:
-        dataloader: Torch DataLoader yielding batches of CT volumes.
-    Returns:
-        mean: Mean intensity across dataset.
-        std: Standard deviation of intensities across dataset.
-        median: Median intensity across dataset.
-        p25: 25th percentile intensity.
-        p75: 75th percentile intensity.
-    """
-    logger.info("[DATALOADER] Computing dataset intensity statistics...")
-    n_voxels = 0
-    sum_intensity = 0.0
-    sum_squared_intensity = 0.0
-    all_intensities = []
+    # Args:
+    #     dataloader: Torch DataLoader yielding batches of CT volumes.
+    #     hu_min: Minimum HU value to include in statistics (default: -200 HU).
+    #     hu_max: Maximum HU value to include in statistics (default: 300 HU).
+    # Returns:
+    #     mean: Mean intensity across dataset (within HU range).
+    #     std: Standard deviation of intensities (within HU range).
+    #     median: Median intensity (within HU range).
+    #     p25: 25th percentile intensity (within HU range).
+    #     p75: 75th percentile intensity (within HU range).
+    # """
+    # logger.info(f"[DATALOADER] Computing dataset intensity statistics for HU range [{hu_min}, {hu_max}]...")
+    # n_voxels = 0
+    # sum_intensity = 0.0
+    # sum_squared_intensity = 0.0
+    # all_intensities = []
 
-    for batch in dataloader:
-        images = batch['ct'][tio.DATA]
-        batch_size = images.size(0)
-        n_voxels += images.numel()
-        sum_intensity += images.sum().item()
-        sum_squared_intensity += (images ** 2).sum().item()
-        all_intensities.append(images.cpu().numpy().flatten())
+    # for batch in tqdm(dataloader, desc="[DATASET] Computing statistics"):
+    #     images = batch['ct'][tio.DATA]
+        
+    #     # Only include voxels within target HU range (no clamping, just filtering)
+    #     mask = (images > hu_min) & (images < hu_max)
+    #     masked_images = images[mask]
+        
+    #     if masked_images.numel() == 0:
+    #         continue
+        
+    #     n_voxels += masked_images.numel()
+    #     sum_intensity += masked_images.sum().item()
+    #     sum_squared_intensity += (masked_images ** 2).sum().item()
+    #     all_intensities.append(masked_images.cpu().numpy().flatten())
 
-    mean = sum_intensity / n_voxels
-    variance = (sum_squared_intensity / n_voxels) - (mean ** 2)
-    std = np.sqrt(variance)
+    # mean = sum_intensity / n_voxels
+    # variance = (sum_squared_intensity / n_voxels) - (mean ** 2)
+    # std = np.sqrt(variance)
 
-    all_intensities = np.concatenate(all_intensities)
-    median = np.median(all_intensities)
-    p25 = np.percentile(all_intensities, 25)
-    p75 = np.percentile(all_intensities, 75)
+    # all_intensities = np.concatenate(all_intensities)
+    # median = np.median(all_intensities)
+    # p25 = np.percentile(all_intensities, 25)
+    # p75 = np.percentile(all_intensities, 75)
 
-    logger.info(f"[DATALOADER] Computed statistics - Mean: {mean}, Std: {std}, Median: {median}, P25: {p25}, P75: {p75}")
+    # logger.info(f"[DATALOADER] Computed statistics ({n_voxels} voxels in range) - Mean: {mean:.2f}, Std: {std:.2f}, Median: {median:.2f}, P25: {p25:.2f}, P75: {p75:.2f}")
+    
+    stats = {
+      "mean": 17.4747314453125,
+      "std": 98.72435760498047,
+      "min": -199.0,
+      "max": 300.0,
+      "median": 27.0,
+      "percentile_00_5": -199.0,
+      "percentile_05_0": -118.0,
+      "percentile_25_0": -74.0,
+      "percentile_75_0": 82.0,
+      "percentile_95_0": 183.0,
+      "percentile_99_5": 298.0,
+      "iqr": 156.0
+    }
+    mean, std, median, p25, p75 = stats["mean"], stats["std"], stats["median"], stats["percentile_25_0"], stats["percentile_75_0"]
     return mean, std, median, p25, p75
     
     
@@ -66,17 +93,21 @@ def extract_class_label(file_path: str) -> str:
     Returns:
         Normalized class label string
     """
-    class_label = os.path.basename(os.path.dirname(file_path))
+    
+    class_label = os.path.basename(os.path.dirname(os.path.dirname(file_path)))
     # Normalize A, C, and A+C labels to 'A'
     # 0
-    if class_label in {'A', 'C', 'A+C', 'A+B', 'A+D', 'A+D'}:
+    if class_label in {'A', 'C', 'AC', 'AB', 'AD'}:
         return 'A'
     # 1
-    if class_label in {'B',  'B+C', 'B+D'}:
+    if class_label in {'B',  'BC', 'BD'}:
         return 'B'
     # 2
     if class_label in {'D'}:
         return 'D'
+    # 3    
+    if not class_label in {'A', 'B', 'C', 'D', 'AC', 'AB', 'AD', 'BC', 'BD'}:
+        return 'NG'
     return class_label
 
 

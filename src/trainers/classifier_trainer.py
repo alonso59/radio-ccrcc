@@ -11,7 +11,7 @@ import torch.optim as optim
 from omegaconf import DictConfig
 
 from .base_trainer import BaseTrainer
-from utils.scheduler import get_scheduler
+from ..utils.scheduler import get_scheduler
 
 
 class ClassifierTrainer(BaseTrainer):

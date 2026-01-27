@@ -10,7 +10,7 @@ from .base_trainer import BaseTrainer
 from .autoencoder_trainer import AutoencoderTrainer
 from .adversarial_autoencoder_trainer import AdversarialAutoencoderTrainer
 from .classifier_trainer import ClassifierTrainer
-
+import logging
 
 class TrainerFactory:
     """
@@ -145,7 +145,7 @@ class TrainerFactory:
             raise TypeError(f"{trainer_class} must inherit from BaseTrainer")
         
         cls.TRAINER_REGISTRY[name] = trainer_class
-        print(f"Registered trainer '{name}': {trainer_class.__name__}")
+        logging.info(f"[TRAINER FACTORY]Registered trainer '{name}': {trainer_class.__name__}")
     
     @classmethod
     def get_available_modes(cls) -> list:

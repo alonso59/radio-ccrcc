@@ -12,11 +12,7 @@ from omegaconf import DictConfig
 from .base_trainer import BaseTrainer
 from .loss import ELBOLoss
 from ..dataloader.dataloader import map_label_to_category
-from utils.scheduler import get_scheduler
-
-
-from src.dataloader.augmentations import P_LOW, P_HIGH
-
+from ..utils.scheduler import get_scheduler
 
 class AutoencoderTrainer(BaseTrainer):
     """
@@ -70,15 +66,8 @@ class AutoencoderTrainer(BaseTrainer):
     
     def setup_criteria(self) -> None:
         """Initialize loss function."""
-        # lw = self.cfg.loss_weights
-        # self.perc_loss = Perceptual().to(self.device)
+        print("beta KL:", self.cfg.loss_weights.kl)
         self.criterion = ELBOLoss().to(self.device)
-        # self.w_perc = float(getattr(lw, "perceptual", 0.1))
-        # self.w_recon = float(getattr(lw, "recon", 0.1))
-        # self.criterion = lambda recon, target, mu, logvar, beta: (
-        #     self.w_recon * self.recon_loss(recon, target, mu, logvar, beta) +
-        #     self.w_perc * self.perc_loss(recon, target) 
-        # )
 
     def set_train_mode(self, train: bool) -> None:
         """Set model to train or eval mode."""
@@ -101,16 +90,17 @@ class AutoencoderTrainer(BaseTrainer):
                     labels = [map_label_to_category(lbl) for lbl in batch['label']]
                     self.label_collection['train'].append(np.array(labels))
         
-        # Compute loss
-        beta = self.cfg.loss_weights.kl
+        # Get current beta
+        current_beta = self.cfg.loss_weights.kl
+        
         recon, kl = self.criterion(
             reconstruction, 
             inputs, 
             mu=z_mu, 
-            sigma=z_sigma, 
-            beta=beta
+            sigma=z_sigma,
+            beta=current_beta
         )
-        loss = recon + kl
+        loss = recon # + kl
         # Backward pass
         loss.backward()
         self.optimizer.step()
@@ -122,7 +112,7 @@ class AutoencoderTrainer(BaseTrainer):
             "kl": kl.item()
         }
         metrics.update(self._compute_quality_metrics(reconstruction, inputs))
-        
+        print(f"LR: {self.optimizer.param_groups[0]['lr']:.6f}")
         return metrics
     
     def validation_step(self, batch: Any) -> Dict[str, float]:
@@ -138,7 +128,6 @@ class AutoencoderTrainer(BaseTrainer):
                 self.random_idx = torch.randint(0, inputs.shape[0], (1,)).item()
                 self.rand_input = inputs[self.random_idx].detach().cpu()
                 self.rand_recon = reconstruction[self.random_idx].detach().cpu()
-                
             # Collect latents for UMAP
             if self.collect_latents and hasattr(self, '_collect_this_epoch'):
                 if self._collect_this_epoch:
@@ -149,15 +138,16 @@ class AutoencoderTrainer(BaseTrainer):
                         self.label_collection['val'].append(np.array(labels))
             
             # Compute loss
-            beta = self.cfg.loss_weights.kl
+            current_beta = self.cfg.loss_weights.kl
+            
             recon, kl = self.criterion(
             reconstruction, 
             inputs,
-            mu=z_mu, 
-            sigma=z_sigma, 
-            beta=beta
+            mu=z_mu,
+            sigma=z_sigma,
+            beta=current_beta
         )
-            loss = recon + kl
+            loss = recon # + kl
             # Compute metrics
             metrics = {
                 "loss": loss.item(),
@@ -230,9 +220,9 @@ class AutoencoderTrainer(BaseTrainer):
             self._log_latent_umap(epoch)
         
         # Step ReduceLROnPlateau if needed
-        if self.scheduler is not None and isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+        if isinstance(self.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
             monitor_metric = getattr(self.cfg.trainer, 'monitor_metric', 'loss')
-            metric_value = val_metrics.get(monitor_metric, val_metrics.get('loss', 0))
+            metric_value = val_metrics.get(monitor_metric, val_metrics['loss'])
             self.scheduler.step(metric_value)
         
         # Call parent implementation for callbacks

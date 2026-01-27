@@ -12,7 +12,7 @@ from ..models.classifier import Classifier3D
 from ..dataloader.dataloader import DataLoaderFactory
 from ..utils.callbacks import ModelCheckpoint
 from ..utils.logger import TensorBoardLogger
-
+import logging
 
 class ComponentFactory:
     """Factory for creating training components."""
@@ -42,10 +42,10 @@ class ComponentFactory:
     ) -> torch.nn.Module:
         """Wrap model with DataParallel if needed."""
         if use_dataparallel and torch.cuda.device_count() > 1 and device == 'cuda':
-            print(f"🔥 Using DataParallel with {torch.cuda.device_count()} GPUs")
+            logging.info(f"🔥 Using DataParallel with {torch.cuda.device_count()} GPUs")
             return torch.nn.DataParallel(model)
         elif device == 'cuda':
-            print(f"💻 Using single GPU: cuda:0")
+            logging.info(f"💻 Using single GPU: cuda:0")
         return model
     
     @staticmethod

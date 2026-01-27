@@ -3,6 +3,7 @@ import torch.nn as nn
 from monai.networks.nets.autoencoderkl import AutoencoderKL
 from omegaconf import DictConfig
 from torchinfo import summary
+import logging
 
 class Autoencoder(nn.Module):
     def __init__(self, cfg: DictConfig):
@@ -26,14 +27,14 @@ class Autoencoder(nn.Module):
             use_flash_attention=cfg.model.autoencoder.use_flash_attention
         )
         if cfg.model.autoencoder.pretrain:
-            print("Loading pretrained weights from:", cfg.model.autoencoder.pretrained_path)
+            logging.info("Loading pretrained weights from:", cfg.model.autoencoder.pretrained_path)
             state_dict = torch.load(cfg.model.autoencoder.pretrained_path)['model_state_dict']
             # remove autoencoder. prefix
             state_dict = {k.replace("autoencoder.", ""): v for k, v in state_dict.items()}
             
             self.autoencoder.load_state_dict(state_dict=state_dict, strict=True)
         if cfg.model.autoencoder.freeze:
-            print("Freezing autoencoder weights.")
+            logging.info("Freezing autoencoder weights.")
             for param in self.autoencoder.parameters():
                 param.requires_grad = False
                 

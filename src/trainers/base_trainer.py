@@ -14,6 +14,7 @@ from omegaconf import DictConfig
 from tqdm import tqdm
 from pytorch_msssim import ssim
 import torch.nn.functional as F
+import logging
 
 class BaseTrainer(ABC):
     """
@@ -261,9 +262,9 @@ class BaseTrainer(ABC):
         epoch_time: float
     ) -> None:
         """Print summary of epoch results."""
-        print(f"\nEpoch {epoch} | Time: {epoch_time:.2f}s")
-        print(f"Train metrics: {self._format_metrics(train_metrics)}")
-        print(f"Val metrics:   {self._format_metrics(val_metrics)}")
+        logging.info(f"\nEpoch {epoch} | Time: {epoch_time:.2f}s")
+        logging.info(f"Train metrics: {self._format_metrics(train_metrics)}")
+        logging.info(f"Val metrics:   {self._format_metrics(val_metrics)}")
     
     def _format_metrics(self, metrics: Dict[str, float], max_items: int = 5) -> str:
         """Format metrics dictionary for printing."""
@@ -277,7 +278,7 @@ class BaseTrainer(ABC):
         
         if current_val < self.best_val_metric:
             self.best_val_metric = current_val
-            print(f"✓ New best {monitor_metric}: {self.best_val_metric:.4f}")
+            logging.info(f"✓ New best {monitor_metric}: {self.best_val_metric:.4f}")
 
     def _denormalize_to_hu(self, x_iqr: torch.Tensor) -> torch.Tensor:
         """
@@ -312,19 +313,19 @@ class BaseTrainer(ABC):
         """
         from src.dataloader.augmentations import P_LOW, P_HIGH
         
-        if self.norm_stats:
-            # Convert to HU space for clinical relevance
-            img1_hu = self._denormalize_to_hu(img1).clamp(P_LOW, P_HIGH)
-            img2_hu = self._denormalize_to_hu(img2).clamp(P_LOW, P_HIGH)
-            data_range = float(P_HIGH - P_LOW)  # 500 HU
-            mse = F.mse_loss(img1_hu, img2_hu)
-        else:
-            # Fallback: IQR-normalized space
-            clip_val = 3.0
-            img1 = img1.clamp(-clip_val, clip_val)
-            img2 = img2.clamp(-clip_val, clip_val)
-            data_range = 2 * clip_val  # 6.0
-            mse = F.mse_loss(img1, img2)
+        # if self.norm_stats:
+        #     # Convert to HU space for clinical relevance
+        #     img1_hu = self._denormalize_to_hu(img1).clamp(P_LOW, P_HIGH)
+        #     img2_hu = self._denormalize_to_hu(img2).clamp(P_LOW, P_HIGH)
+        #     data_range = float(P_HIGH - P_LOW)  # 500 HU
+        #     mse = F.mse_loss(img1_hu, img2_hu)
+        # else:
+        # Fallback: IQR-normalized space
+        clip_val = 3.0
+        img1 = img1.clamp(-clip_val, clip_val)
+        img2 = img2.clamp(-clip_val, clip_val)
+        data_range = 2 * clip_val  # 6.0
+        mse = F.mse_loss(img1, img2)
         
         if mse == 0:
             return torch.tensor(float('inf'))
@@ -335,8 +336,6 @@ class BaseTrainer(ABC):
         self,
         x: torch.Tensor,
         x_hat: torch.Tensor,
-        win_size: int = 7,
-        win_sigma: float = 1.5,
         reduction: str = "mean"
     ) -> torch.Tensor:
         """
@@ -357,36 +356,32 @@ class BaseTrainer(ABC):
         """
         from src.dataloader.augmentations import P_LOW, P_HIGH
         
-        if self.norm_stats:
-            # Convert to HU space
-            x_hu = self._denormalize_to_hu(x).clamp(P_LOW, P_HIGH)
-            x_hat_hu = self._denormalize_to_hu(x_hat).clamp(P_LOW, P_HIGH)
+        # if self.norm_stats:
+        #     # Convert to HU space
+        #     x_hu = self._denormalize_to_hu(x).clamp(P_LOW, P_HIGH)
+        #     x_hat_hu = self._denormalize_to_hu(x_hat).clamp(P_LOW, P_HIGH)
             
-            # Normalize to [0, 1] for SSIM
-            data_range_hu = float(P_HIGH - P_LOW)
-            x_norm = (x_hu - P_LOW) / data_range_hu
-            x_hat_norm = (x_hat_hu - P_LOW) / data_range_hu
-            ssim_data_range = 1.0
-        else:
-            # Fallback: IQR-normalized space
-            clip_val = 3.0
-            x_hat = x_hat.clamp(-clip_val, clip_val)
-            x = x.clamp(-clip_val, clip_val)
-            
-            # Map [-3, 3] to [0, 1]
-            x_norm = (x + clip_val) / (2 * clip_val)
-            x_hat_norm = (x_hat + clip_val) / (2 * clip_val)
-            ssim_data_range = 1.0
+        #     # Normalize to [0, 1] for SSIM
+        #     data_range_hu = float(P_HIGH - P_LOW)
+        #     x_norm = (x_hu - P_LOW) / data_range_hu
+        #     x_hat_norm = (x_hat_hu - P_LOW) / data_range_hu
+        #     ssim_data_range = 1.0
+        # else:
+        # Fallback: IQR-normalized space
+        clip_val = 3.0
+        x_hat = x_hat.clamp(-clip_val, clip_val)
+        x = x.clamp(-clip_val, clip_val)
+        
+        # Map [-3, 3] to [0, 1]
+        x_norm = (x + clip_val) / (2 * clip_val)
+        x_hat_norm = (x_hat + clip_val) / (2 * clip_val)
+        ssim_data_range = 1.0
         
         size_avg = (reduction == "mean")
         
         return ssim(
             x_norm, x_hat_norm,
-            data_range=ssim_data_range,
-            size_average=size_avg,
-            win_size=win_size,
-            win_sigma=win_sigma,
-            nonnegative_ssim=True
+            data_range=ssim_data_range
         )
     
     def _compute_quality_metrics(self, x_recon: torch.Tensor, x: torch.Tensor) -> Dict[str, float]:

@@ -205,7 +205,9 @@ class BaseTrainer(ABC):
     
     def on_fit_end(self) -> None:
         """Hook called after training ends."""
-        pass
+        for cb in self.callbacks:
+            if hasattr(cb, 'on_fit_end'):
+                cb.on_fit_end()
     
     def on_epoch_start(self, epoch: int, is_train: bool) -> None:
         """Hook called at the start of each epoch."""

@@ -6,7 +6,7 @@ from torchinfo import summary
 import logging
 
 class Autoencoder(nn.Module):
-    def __init__(self, cfg: DictConfig):
+    def __init__(self, cfg):
         super().__init__()
         self.autoencoder = AutoencoderKL(
             spatial_dims=cfg.model.autoencoder.spatial_dims,

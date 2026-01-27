@@ -10,6 +10,7 @@ from .component_factory import ComponentFactory
 from .config_manager import ConfigManager
 from ..trainers.trainer_factory import TrainerFactory
 from ..utils.logger import TensorBoardLogger
+from ..utils.results_callback import ResultsFolderCallback
 
 class TrainingSetup:
     """Data class holding all training components."""
@@ -75,7 +76,9 @@ class AutoencoderSetupBuilder(BaseSetupBuilder):
             filename='best_autoencoder.pth',
             model=self.model
         )
-        self.callbacks = [checkpoint_callback]
+        results_callback = ResultsFolderCallback(self.cfg)
+        results_callback.set_model(self.model)
+        self.callbacks = [checkpoint_callback, results_callback]
         return self
     
     def build(self) -> TrainingSetup:
@@ -117,7 +120,9 @@ class AdversarialSetupBuilder(BaseSetupBuilder):
             filename='best_adversarial.pth',
             model=self.model
         )
-        self.callbacks = [checkpoint_callback]
+        results_callback = ResultsFolderCallback(self.cfg)
+        results_callback.set_model(self.model)
+        self.callbacks = [checkpoint_callback, results_callback]
         return self
     
     def build(self) -> TrainingSetup:
@@ -177,7 +182,9 @@ class ClassifierSetupBuilder(BaseSetupBuilder):
             filename='best_classifier.pth',
             model=self.model_class
         )
-        self.callbacks = [checkpoint_callback]
+        results_callback = ResultsFolderCallback(self.cfg)
+        results_callback.set_model(self.model_class)
+        self.callbacks = [checkpoint_callback, results_callback]
         return self
     
     def build(self) -> TrainingSetup:

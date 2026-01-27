@@ -63,7 +63,14 @@ class ComponentFactory:
     @staticmethod
     def create_logger(experiment_name: str) -> TensorBoardLogger:
         """Create TensorBoard logger."""
-        return TensorBoardLogger(experiment_name=experiment_name)
+        # Hydra sets the working directory to the run directory; using a relative
+        # root keeps TensorBoard artifacts inside the run folder.
+        return TensorBoardLogger(
+            root="tb",
+            experiment_name=experiment_name,
+            add_timestamp=False,
+            use_date_structure=False,
+        )
     
     @staticmethod
     def create_checkpoint_callback(

@@ -66,7 +66,6 @@ class AutoencoderTrainer(BaseTrainer):
     
     def setup_criteria(self) -> None:
         """Initialize loss function."""
-        print("beta KL:", self.cfg.loss_weights.kl)
         self.criterion = ELBOLoss().to(self.device)
 
     def set_train_mode(self, train: bool) -> None:
@@ -112,7 +111,6 @@ class AutoencoderTrainer(BaseTrainer):
             "kl": kl.item()
         }
         metrics.update(self._compute_quality_metrics(reconstruction, inputs))
-        print(f"LR: {self.optimizer.param_groups[0]['lr']:.6f}")
         return metrics
     
     def validation_step(self, batch: Any) -> Dict[str, float]:

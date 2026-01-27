@@ -9,78 +9,88 @@ import torch
 import numpy as np
 import nibabel as nib
 import torchio as tio
-from typing import List
+from typing import List, Tuple
 from omegaconf import DictConfig
 from src.dataloader.augmentations import train_augmentations, val_augmentations
 import os
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+from hydra.utils import to_absolute_path
+
 logger = logging.getLogger(__name__)
 
-def extract_iterative_statistics(dataloader: DataLoader, hu_min: float = -200.0, hu_max: float = 300.0):
-    # """
-    # Compute dataset-wide intensity statistics iteratively for voxels within target HU range.
+def extract_iterative_statistics(fingerprint_path: str) -> Tuple[float, float, float, float, float]:
+    """
+    Load dataset statistics from fingerprint JSON file.
     
-    # Args:
-    #     dataloader: Torch DataLoader yielding batches of CT volumes.
-    #     hu_min: Minimum HU value to include in statistics (default: -200 HU).
-    #     hu_max: Maximum HU value to include in statistics (default: 300 HU).
-    # Returns:
-    #     mean: Mean intensity across dataset (within HU range).
-    #     std: Standard deviation of intensities (within HU range).
-    #     median: Median intensity (within HU range).
-    #     p25: 25th percentile intensity (within HU range).
-    #     p75: 75th percentile intensity (within HU range).
-    # """
-    # logger.info(f"[DATALOADER] Computing dataset intensity statistics for HU range [{hu_min}, {hu_max}]...")
-    # n_voxels = 0
-    # sum_intensity = 0.0
-    # sum_squared_intensity = 0.0
-    # all_intensities = []
-
-    # for batch in tqdm(dataloader, desc="[DATASET] Computing statistics"):
-    #     images = batch['ct'][tio.DATA]
+    Args:
+        fingerprint_path: Path to dataset_fingerprint_images.json or dataset_fingerprint_segmentation.json
         
-    #     # Only include voxels within target HU range (no clamping, just filtering)
-    #     mask = (images > hu_min) & (images < hu_max)
-    #     masked_images = images[mask]
-        
-    #     if masked_images.numel() == 0:
-    #         continue
-        
-    #     n_voxels += masked_images.numel()
-    #     sum_intensity += masked_images.sum().item()
-    #     sum_squared_intensity += (masked_images ** 2).sum().item()
-    #     all_intensities.append(masked_images.cpu().numpy().flatten())
-
-    # mean = sum_intensity / n_voxels
-    # variance = (sum_squared_intensity / n_voxels) - (mean ** 2)
-    # std = np.sqrt(variance)
-
-    # all_intensities = np.concatenate(all_intensities)
-    # median = np.median(all_intensities)
-    # p25 = np.percentile(all_intensities, 25)
-    # p75 = np.percentile(all_intensities, 75)
-
-    # logger.info(f"[DATALOADER] Computed statistics ({n_voxels} voxels in range) - Mean: {mean:.2f}, Std: {std:.2f}, Median: {median:.2f}, P25: {p25:.2f}, P75: {p75:.2f}")
+    Returns:
+        Tuple of (mean, std, median, p25, p75)
+    """
+    logger.info(f"[DATALOADER] Loading dataset statistics from: {fingerprint_path}")
     
-    stats = {
-      "mean": 17.4747314453125,
-      "std": 98.72435760498047,
-      "min": -199.0,
-      "max": 300.0,
-      "median": 27.0,
-      "percentile_00_5": -199.0,
-      "percentile_05_0": -118.0,
-      "percentile_25_0": -74.0,
-      "percentile_75_0": 82.0,
-      "percentile_95_0": 183.0,
-      "percentile_99_5": 298.0,
-      "iqr": 156.0
-    }
-    mean, std, median, p25, p75 = stats["mean"], stats["std"], stats["median"], stats["percentile_25_0"], stats["percentile_75_0"]
-    return mean, std, median, p25, p75
+    if not os.path.exists(fingerprint_path):
+        raise FileNotFoundError(f"[DATALOADER] Fingerprint file not found: {fingerprint_path}")
+    
+    with open(fingerprint_path, "r") as f:
+        stats = json.load(f)
+    
+    def _pick_stats_dict(payload: dict) -> dict:
+        """Return the dict that actually contains the intensity stats."""
+        # Most robust: nnUNet-style (or similar) per-channel properties
+        per_channel = payload.get("foreground_intensity_properties_per_channel")
+        if isinstance(per_channel, dict) and per_channel:
+            # Common key is "0" but accept any single/first channel.
+            if "0" in per_channel and isinstance(per_channel["0"], dict):
+                return per_channel["0"]
+            for _, v in per_channel.items():
+                if isinstance(v, dict):
+                    return v
+
+        # Fallbacks if project writes a flatter schema
+        for k in ("dataset_statistics", "intensity_properties", "foreground_intensity_properties"):
+            v = payload.get(k)
+            if isinstance(v, dict) and v:
+                return v
+
+        return payload
+
+    stats_dict = _pick_stats_dict(stats)
+
+    # Extract required statistics (support a few common key variants)
+    mean = stats_dict.get("mean")
+    std = stats_dict.get("std")
+    median = stats_dict.get("median")
+    p25 = stats_dict.get("percentile_25_0", stats_dict.get("percentile_25", stats_dict.get("p25")))
+    p75 = stats_dict.get("percentile_75_0", stats_dict.get("percentile_75", stats_dict.get("p75")))
+    
+    # Validate all required fields are present
+    if any(v is None for v in [mean, std, median, p25, p75]):
+        available = sorted(list(stats_dict.keys())) if isinstance(stats_dict, dict) else []
+        raise ValueError(
+            f"[DATALOADER] Missing required statistics in fingerprint file: {fingerprint_path}. "
+            f"Looked in keys: {available}"
+        )
+
+    assert mean is not None
+    assert std is not None
+    assert median is not None
+    assert p25 is not None
+    assert p75 is not None
+    
+    mean_f = float(mean)
+    std_f = float(std)
+    median_f = float(median)
+    p25_f = float(p25)
+    p75_f = float(p75)
+
+    logger.info(
+        f"[DATALOADER] Loaded statistics - mean: {mean_f:.2f}, std: {std_f:.2f}, median: {median_f:.2f}"
+    )
+    return mean_f, std_f, median_f, p25_f, p75_f
     
     
 def extract_class_label(file_path: str) -> str:
@@ -182,18 +192,36 @@ class DataLoaderFactory:
         """
         Create train/val loaders for CT data using config.
         data_cfg must have:
-            - splits_final: path to JSON with splits
+            - dataset_id: Dataset ID (e.g., Dataset320)
+            - dataset_type: images or segmentation
+            - base_path: Base path to dataset folder (default: data/dataset)
             - fold: fold name or number
-            - train_files: key for train files in fold dict
-            - val_files: key for val files in fold dict
             - batch_size, num_workers
         """
         logger.info("[DATALOADER] Creating CT data loaders")
-        splits_path = data_cfg.splits_path
+        
+        # Construct paths from dataset_id and dataset_type
+        dataset_id = data_cfg.dataset_id
+        dataset_type = data_cfg.get('dataset_type', 'images')
+        base_path = data_cfg.get('base_path', 'data/dataset')
+
+        # Hydra changes the process working directory to the run folder.
+        # Resolve relative dataset paths against the original project cwd.
+        base_path = base_path if os.path.isabs(base_path) else to_absolute_path(base_path)
+        
+        splits_filename = f"splits_{dataset_type}.json"
+        splits_path = os.path.join(base_path, dataset_id, 'voi', splits_filename)
+        
+        logger.info(f"[DATALOADER] Dataset: {dataset_id}, Type: {dataset_type}")
+        logger.info(f"[DATALOADER] Loading splits from: {splits_path}")
+        
         fold = data_cfg.fold
         fold_name = "ct_folds"
+        if not os.path.exists(splits_path):
+            raise FileNotFoundError(
+                f"[DATALOADER] Splits file not found: {splits_path} (cwd={os.getcwd()})"
+            )
 
-        logger.info(f"[DATALOADER] Loading splits from: {splits_path}")
         with open(splits_path, "r") as f:
             dict_splits = json.load(f)
         try:
@@ -215,17 +243,14 @@ class DataLoaderFactory:
         logger.info(f"[DATALOADER] #train={len(train_files)}, #val={len(val_files)}")
         train_subjects = create_ct_subjects(train_files)
         val_subjects = create_ct_subjects(val_files)
-        dummy_dataset = tio.SubjectsDataset(train_subjects)
-        dummy_loader = DataLoader(
-            dummy_dataset,
-            batch_size=1,
-            shuffle=False,
-            num_workers=1,
-            pin_memory=False,
-        )
         
-        # Compute dataset statistics
-        data_stats = extract_iterative_statistics(dummy_loader)
+        # Construct fingerprint file path
+        splits_dir = os.path.dirname(splits_path)
+        fingerprint_filename = f"dataset_fingerprint_{dataset_type}.json"
+        fingerprint_path = os.path.join(splits_dir, fingerprint_filename)
+        
+        # Load dataset statistics from fingerprint file
+        data_stats = extract_iterative_statistics(fingerprint_path)
         
         train_transform = train_augmentations(data_stats)
         val_transform = val_augmentations(data_stats)

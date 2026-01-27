@@ -1,8 +1,28 @@
 defaults:
   - model: model
 
+
+# Results output layout
+results:
+  root: results
+  experiment: ${dataset.dataset_id}_ldm_${trainer.training_mode}
+
+# Hydra output: write runs directly into results/ (timestamped per run)
+hydra:
+  run:
+    dir: ${results.root}/${results.experiment}/fold_${dataset.fold}/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: ${results.root}/${results.experiment}/multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: fold_${dataset.fold}/${hydra.job.num}
+  job_logging:
+    handlers:
+      file:
+        filename: ${hydra.runtime.output_dir}/Training_log_${now:%Y-%m-%d_%H-%M-%S}.log
+
 dataset:
-  splits_path: data/dataset/Dataset320/voi/splits_images.json
+  dataset_id: Dataset320         # Dataset ID (e.g., Dataset220, Dataset320, Dataset420)
+  dataset_type: images           # Options: images | segmentation
+  base_path: data/dataset        # Base path to dataset folder
   fold: 0
   batch_size: 32
   num_workers: 12

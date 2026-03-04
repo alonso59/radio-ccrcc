@@ -392,34 +392,34 @@ sync, W/L controls, and overlay toggles.
 
 **Tasks**:
 
-- [ ] **M8.1** Create `SliceView.tsx`:
+- [x] **M8.1** Create `SliceView.tsx`:
   - Fetches PNG from `/api/slice/{axis}/{index}` and displays as `<img>`
   - Scroll wheel on panel → change slice index → re-fetch
   - Canvas crosshair overlay (two colored lines at current position)
   - Left-click → update crosshair position → notify parent
-- [ ] **M8.2** Create `useSliceNavigation.ts` hook:
+- [x] **M8.2** Create `useSliceNavigation.ts` hook:
   - State: `{axial: number, coronal: number, sagittal: number}`
   - On crosshair click in one view, compute corresponding indices for others
   - Expose `setSlice(axis, index)` and `sliceIndices` to components
-- [ ] **M8.3** Create `SliceSlider.tsx`:
+- [x] **M8.3** Create `SliceSlider.tsx`:
   - Slider per axis below the grid (or inside each panel)
   - Bound to `useSliceNavigation` state
-- [ ] **M8.4** Create `WindowLevelControl.tsx`:
+- [x] **M8.4** Create `WindowLevelControl.tsx`:
   - Right-click drag on any 2D panel: horizontal=width, vertical=level
   - Numeric display of current W/L values
   - Preset buttons: Soft Tissue, Bone, Lung, Brain
-- [ ] **M8.5** Create `useWindowLevel.ts` hook:
+- [x] **M8.5** Create `useWindowLevel.ts` hook:
   - State: `{ww: number, wl: number}`
   - Presets: `{softTissue: [400, 50], bone: [1800, 400], lung: [1500, -600], brain: [80, 40]}`
-- [ ] **M8.6** Create `LayerToggle.tsx` + `OpacitySlider.tsx`:
+- [x] **M8.6** Create `LayerToggle.tsx` + `OpacitySlider.tsx`:
   - Per-label checkbox (kidney/tumor/cyst) with color indicator
   - Per-label opacity slider (0.0–1.0)
   - Changes trigger slice re-fetch with updated query params
-- [ ] **M8.7** Wire everything into `ViewerPage`:
+- [x] **M8.7** Wire everything into `ViewerPage`:
   - Load series on mount → fetch initial slices for all three axes
   - Crosshair sync between panels
   - W/L and overlay controls affect all slice fetches
-- [ ] **M8.8** Verification:
+- [x] **M8.8** Verification:
   - Scrolling through axial slices shows correct anatomy
   - Clicking in axial view updates coronal + sagittal crosshairs
   - W/L drag changes contrast
@@ -585,7 +585,7 @@ sequence. All features work through the container. Image size within budget.
 | M5        | Frontend: Shell & Routing          | ✅ Completed    | 2026-03-04 |
 | M6        | Frontend: Dataset & Patient Pages  | ✅ Completed    | 2026-03-04 |
 | M7        | Frontend: 2×2 Viewer Layout        | ✅ Completed    | 2026-03-04 |
-| M8        | Frontend: 2D Slice Viewers         | ⬜ Not started  |       |
+| M8        | Frontend: 2D Slice Viewers         | ✅ Completed    |       |
 | M9        | Frontend: 3D Surface Panel         | ⬜ Not started  |       |
 | M10       | Frontend: Settings Persistence     | ⬜ Not started  |       |
 | M11       | Integration Testing & Polish       | ⬜ Not started  |       |

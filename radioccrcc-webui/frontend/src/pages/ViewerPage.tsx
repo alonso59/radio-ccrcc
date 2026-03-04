@@ -1,4 +1,5 @@
 import {
+  Alert,
   Box,
   Button,
   Chip,
@@ -7,12 +8,38 @@ import {
   Stack,
   Typography,
 } from '@mui/material'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link as RouterLink, useParams } from 'react-router-dom'
 
-import type { SeriesInfo } from '../services/api'
+import {
+  apiClient,
+  getApiErrorMessage,
+  type Axis,
+  type SeriesInfo,
+  type SliceQuery,
+  type VolumeInfo,
+} from '../services/api'
+import LayerToggle from '../components/viewer/LayerToggle'
+import OpacitySlider from '../components/viewer/OpacitySlider'
 import SeriesSelector from '../components/viewer/SeriesSelector'
+import SliceSlider from '../components/viewer/SliceSlider'
+import SliceView from '../components/viewer/SliceView'
 import ViewerGrid2x2 from '../components/viewer/ViewerGrid2x2'
+import WindowLevelControl from '../components/viewer/WindowLevelControl'
+import { useSliceNavigation } from '../components/viewer/useSliceNavigation'
+import { useWindowLevel } from '../components/viewer/useWindowLevel'
+
+const PANEL_ACCENTS: Record<Axis, string> = {
+  axial: '#fbbf24',
+  coronal: '#ef4444',
+  sagittal: '#22c55e',
+}
+
+const LAYER_META: Record<number, { label: string; color: string; defaultOpacity: number }> = {
+  1: { label: 'Kidney', color: '#22d3ee', defaultOpacity: 0.15 },
+  2: { label: 'Tumor', color: '#facc15', defaultOpacity: 0.2 },
+  3: { label: 'Cyst', color: '#e879f9', defaultOpacity: 0.15 },
+}
 
 function ViewerPage() {
   const { dsid = 'unknown-dataset', pid = 'unknown-patient' } = useParams<{
@@ -20,6 +47,194 @@ function ViewerPage() {
     pid: string
   }>()
   const [selectedSeries, setSelectedSeries] = useState<SeriesInfo | null>(null)
+  const [volumeRequest, setVolumeRequest] = useState<{
+    seriesId: string | null
+    info: VolumeInfo | null
+    error: string | null
+  }>({
+    seriesId: null,
+    info: null,
+    error: null,
+  })
+  const [layerState, setLayerState] = useState(() => ({
+    1: { visible: true, opacity: LAYER_META[1].defaultOpacity },
+    2: { visible: true, opacity: LAYER_META[2].defaultOpacity },
+    3: { visible: true, opacity: LAYER_META[3].defaultOpacity },
+  }))
+  const windowLevel = useWindowLevel()
+
+  const activeVolumeInfo =
+    selectedSeries && volumeRequest.seriesId === selectedSeries.series_id
+      ? volumeRequest.info
+      : null
+  const volumeError =
+    selectedSeries && volumeRequest.seriesId === selectedSeries.series_id
+      ? volumeRequest.error
+      : null
+  const volumeLoading =
+    selectedSeries !== null && volumeRequest.seriesId !== selectedSeries.series_id
+  const navigation = useSliceNavigation(activeVolumeInfo?.shape ?? null)
+
+  useEffect(() => {
+    if (!selectedSeries) {
+      return
+    }
+
+    let active = true
+
+    apiClient
+      .loadSeries(dsid, pid, selectedSeries.series_id)
+      .then((info) => {
+        if (!active) {
+          return
+        }
+        setVolumeRequest({
+          seriesId: selectedSeries.series_id,
+          info,
+          error: null,
+        })
+      })
+      .catch((requestError) => {
+        if (!active) {
+          return
+        }
+        setVolumeRequest({
+          seriesId: selectedSeries.series_id,
+          info: null,
+          error: getApiErrorMessage(requestError),
+        })
+      })
+
+    return () => {
+      active = false
+    }
+  }, [dsid, pid, selectedSeries])
+
+  const availableLabels = activeVolumeInfo?.labels ?? []
+  const visibleLayers = availableLabels.filter((label) => layerState[label as 1 | 2 | 3]?.visible)
+
+  const sliceQuery: SliceQuery = {
+    ww: windowLevel.ww,
+    wl: windowLevel.wl,
+    layers: visibleLayers,
+    opacity_1: layerState[1].opacity,
+    opacity_2: layerState[2].opacity,
+    opacity_3: layerState[3].opacity,
+  }
+
+  const viewerPanels = {
+    axial: {
+      caption: describeSlice('axial', navigation.sliceIndices.axial, navigation.getMaxIndex('axial')),
+      content: (
+        <SlicePanel
+          accent={PANEL_ACCENTS.axial}
+          axis="axial"
+          crosshair={navigation.getCrosshair('axial')}
+          errorText={volumeError}
+          index={navigation.sliceIndices.axial}
+          maxIndex={navigation.getMaxIndex('axial')}
+          onCrosshairChange={(point) => navigation.setFromPanelPosition('axial', point)}
+          onSliceChange={(index) => navigation.setSlice('axial', index)}
+          onWindowLevelDrag={windowLevel.applyDrag}
+          query={sliceQuery}
+          requestKey={activeVolumeInfo?.series_id ?? null}
+          wl={windowLevel.wl}
+          ww={windowLevel.ww}
+        />
+      ),
+    },
+    coronal: {
+      caption: describeSlice(
+        'coronal',
+        navigation.sliceIndices.coronal,
+        navigation.getMaxIndex('coronal'),
+      ),
+      content: (
+        <SlicePanel
+          accent={PANEL_ACCENTS.coronal}
+          axis="coronal"
+          crosshair={navigation.getCrosshair('coronal')}
+          errorText={volumeError}
+          index={navigation.sliceIndices.coronal}
+          maxIndex={navigation.getMaxIndex('coronal')}
+          onCrosshairChange={(point) => navigation.setFromPanelPosition('coronal', point)}
+          onSliceChange={(index) => navigation.setSlice('coronal', index)}
+          onWindowLevelDrag={windowLevel.applyDrag}
+          query={sliceQuery}
+          requestKey={activeVolumeInfo?.series_id ?? null}
+          wl={windowLevel.wl}
+          ww={windowLevel.ww}
+        />
+      ),
+    },
+    sagittal: {
+      caption: describeSlice(
+        'sagittal',
+        navigation.sliceIndices.sagittal,
+        navigation.getMaxIndex('sagittal'),
+      ),
+      content: (
+        <SlicePanel
+          accent={PANEL_ACCENTS.sagittal}
+          axis="sagittal"
+          crosshair={navigation.getCrosshair('sagittal')}
+          errorText={volumeError}
+          index={navigation.sliceIndices.sagittal}
+          maxIndex={navigation.getMaxIndex('sagittal')}
+          onCrosshairChange={(point) => navigation.setFromPanelPosition('sagittal', point)}
+          onSliceChange={(index) => navigation.setSlice('sagittal', index)}
+          onWindowLevelDrag={windowLevel.applyDrag}
+          query={sliceQuery}
+          requestKey={activeVolumeInfo?.series_id ?? null}
+          wl={windowLevel.wl}
+          ww={windowLevel.ww}
+        />
+      ),
+    },
+    surface: {
+      caption: '3D surface panel placeholder',
+      content: (
+        <Stack
+          spacing={2}
+          justifyContent="space-between"
+          sx={{
+            height: '100%',
+            p: 2.5,
+            background:
+              'linear-gradient(180deg, rgba(255,255,255,0.015), rgba(255,255,255,0.03))',
+          }}
+        >
+          <Box
+            sx={{
+              flex: 1,
+              minHeight: 0,
+              borderRadius: 3,
+              border: '1px dashed',
+              borderColor: 'divider',
+              background:
+                'radial-gradient(circle at top, rgba(255, 255, 255, 0.08), transparent 42%), rgba(255,255,255,0.015)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              textAlign: 'center',
+              px: 3,
+            }}
+          >
+            <Stack spacing={1.25} alignItems="center">
+              <Typography variant="h5">3D SURFACE</Typography>
+              <Typography variant="body2" color="text.secondary">
+                Surface rendering arrives in M9. The slice controls already sync
+                with the active series metadata.
+              </Typography>
+            </Stack>
+          </Box>
+          <Typography variant="caption" color="text.secondary">
+            Active labels: {availableLabels.length > 0 ? availableLabels.join(', ') : 'none'}
+          </Typography>
+        </Stack>
+      ),
+    },
+  }
 
   return (
     <Stack spacing={3}>
@@ -47,6 +262,12 @@ function ViewerPage() {
                   label={selectedSeries?.filename ?? 'Select a series'}
                   variant="outlined"
                 />
+                {activeVolumeInfo ? (
+                  <Chip
+                    label={`${activeVolumeInfo.shape.join(' × ')}`}
+                    variant="outlined"
+                  />
+                ) : null}
               </Stack>
             </Stack>
 
@@ -63,9 +284,24 @@ function ViewerPage() {
             alignItems={{ lg: 'center' }}
             justifyContent="space-between"
           >
-            <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-              {['Kidney', 'Tumor', 'Cyst'].map((label) => (
-                <Chip key={label} label={label} variant="outlined" size="small" />
+            <Stack direction="row" spacing={1.5} flexWrap="wrap" useFlexGap>
+              {[1, 2, 3].map((label) => (
+                <LayerToggle
+                  key={label}
+                  checked={layerState[label as 1 | 2 | 3].visible}
+                  color={LAYER_META[label].color}
+                  disabled={!availableLabels.includes(label)}
+                  label={LAYER_META[label].label}
+                  onChange={(checked) =>
+                    setLayerState((current) => ({
+                      ...current,
+                      [label]: {
+                        ...current[label as 1 | 2 | 3],
+                        visible: checked,
+                      },
+                    }))
+                  }
+                />
               ))}
             </Stack>
 
@@ -82,35 +318,134 @@ function ViewerPage() {
               </Button>
             </Stack>
           </Stack>
+
+          {volumeLoading ? (
+            <Alert severity="info">Loading volume and initial slices...</Alert>
+          ) : null}
         </Stack>
       </Paper>
 
-      <ViewerGrid2x2 />
+      <ViewerGrid2x2 panels={viewerPanels} />
 
       <Paper elevation={0} sx={{ px: { xs: 3, md: 4 }, py: 2.5 }}>
         <Stack
           direction={{ xs: 'column', lg: 'row' }}
           spacing={2}
           justifyContent="space-between"
-          divider={<Divider orientation="vertical" flexItem sx={{ display: { xs: 'none', lg: 'block' } }} />}
+          divider={
+            <Divider
+              orientation="vertical"
+              flexItem
+              sx={{ display: { xs: 'none', lg: 'block' } }}
+            />
+          }
         >
           <Box sx={{ flex: 1 }}>
-            <Typography variant="overline" color="text.secondary">
-              Bottom Bar
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              Slice sliders, W/L presets, and opacity controls land here in M8.
-            </Typography>
+            <WindowLevelControl
+              ww={windowLevel.ww}
+              wl={windowLevel.wl}
+              onPreset={windowLevel.applyPreset}
+            />
           </Box>
-          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-            {['Soft Tissue', 'Bone', 'Lung', 'Brain'].map((preset) => (
-              <Chip key={preset} label={preset} variant="outlined" />
+          <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
+            {[1, 2, 3].map((label) => (
+              <OpacitySlider
+                key={label}
+                color={LAYER_META[label].color}
+                disabled={!availableLabels.includes(label) || !layerState[label as 1 | 2 | 3].visible}
+                label={LAYER_META[label].label}
+                onChange={(value) =>
+                  setLayerState((current) => ({
+                    ...current,
+                    [label]: {
+                      ...current[label as 1 | 2 | 3],
+                      opacity: value,
+                    },
+                  }))
+                }
+                value={layerState[label as 1 | 2 | 3].opacity}
+              />
             ))}
           </Stack>
         </Stack>
       </Paper>
     </Stack>
   )
+}
+
+function SlicePanel({
+  accent,
+  axis,
+  crosshair,
+  errorText,
+  index,
+  maxIndex,
+  onCrosshairChange,
+  onSliceChange,
+  onWindowLevelDrag,
+  query,
+  requestKey,
+  wl,
+  ww,
+}: {
+  accent: string
+  axis: Axis
+  crosshair: { x: number; y: number }
+  errorText: string | null
+  index: number
+  maxIndex: number
+  onCrosshairChange: (point: { x: number; y: number }) => void
+  onSliceChange: (index: number) => void
+  onWindowLevelDrag: (
+    startWw: number,
+    startWl: number,
+    deltaX: number,
+    deltaY: number,
+  ) => void
+  query: SliceQuery
+  requestKey: string | null
+  wl: number
+  ww: number
+}) {
+  return (
+    <Stack
+      spacing={1.5}
+      sx={{
+        height: '100%',
+        p: 1.5,
+        background:
+          'linear-gradient(180deg, rgba(255,255,255,0.015), rgba(255,255,255,0.03))',
+      }}
+    >
+      <SliceView
+        accent={accent}
+        axis={axis}
+        crosshair={crosshair}
+        disabled={!requestKey}
+        errorText={errorText}
+        index={index}
+        maxIndex={maxIndex}
+        onCrosshairChange={onCrosshairChange}
+        onSliceChange={onSliceChange}
+        onWindowLevelDrag={onWindowLevelDrag}
+        query={query}
+        requestKey={requestKey}
+        wl={wl}
+        ww={ww}
+      />
+      <SliceSlider
+        axis={axis}
+        color={accent}
+        index={index}
+        maxIndex={maxIndex}
+        onChange={onSliceChange}
+      />
+    </Stack>
+  )
+}
+
+function describeSlice(axis: string, index: number, maxIndex: number) {
+  return `${axis.toUpperCase()} ${index + 1} / ${maxIndex + 1}`
 }
 
 export default ViewerPage

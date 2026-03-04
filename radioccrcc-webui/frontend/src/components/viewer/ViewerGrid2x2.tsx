@@ -1,5 +1,5 @@
 import { Box, Stack, Typography } from '@mui/material'
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 
 import ExpandablePanel from './ExpandablePanel'
 
@@ -36,7 +36,16 @@ const PANEL_DEFS = [
 
 type PanelId = (typeof PANEL_DEFS)[number]['id']
 
-function ViewerGrid2x2() {
+interface PanelOverride {
+  caption?: string
+  content?: ReactNode
+}
+
+interface ViewerGrid2x2Props {
+  panels?: Partial<Record<PanelId, PanelOverride>>
+}
+
+function ViewerGrid2x2({ panels = {} }: ViewerGrid2x2Props) {
   const [expandedPanel, setExpandedPanel] = useState<PanelId | null>(null)
 
   return (
@@ -72,66 +81,68 @@ function ViewerGrid2x2() {
           >
             <ExpandablePanel
               axisLabel={panel.label}
-              caption={panel.caption}
+              caption={panels[panel.id]?.caption ?? panel.caption}
               accent={panel.accent}
               expanded={expanded}
               onToggleExpand={() =>
                 setExpandedPanel((current) => (current === panel.id ? null : panel.id))
               }
             >
-              <Stack
-                spacing={2}
-                justifyContent="space-between"
-                sx={{
-                  height: '100%',
-                  p: 2.5,
-                  background:
-                    'linear-gradient(180deg, rgba(255,255,255,0.015), rgba(255,255,255,0.03))',
-                }}
-              >
-                <Box
+              {panels[panel.id]?.content ?? (
+                <Stack
+                  spacing={2}
+                  justifyContent="space-between"
                   sx={{
-                    flex: 1,
-                    minHeight: 0,
-                    borderRadius: 3,
-                    border: '1px dashed',
-                    borderColor: 'divider',
+                    height: '100%',
+                    p: 2.5,
                     background:
-                      'radial-gradient(circle at top, rgba(125, 211, 252, 0.08), transparent 42%), rgba(255,255,255,0.015)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    textAlign: 'center',
-                    px: 3,
+                      'linear-gradient(180deg, rgba(255,255,255,0.015), rgba(255,255,255,0.03))',
                   }}
                 >
-                  <Stack spacing={1.25} alignItems="center">
-                    <Typography variant="h5">{panel.label}</Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      {panel.placeholder}
-                    </Typography>
-                  </Stack>
-                </Box>
-
-                <Stack direction="row" justifyContent="space-between" alignItems="center">
-                  <Typography variant="caption" color="text.secondary">
-                    Double-click header or use the corner control to expand.
-                  </Typography>
-                  <Typography
-                    variant="caption"
+                  <Box
                     sx={{
-                      px: 1,
-                      py: 0.4,
-                      borderRadius: 999,
-                      border: '1px solid',
-                      borderColor: panel.accent,
-                      color: panel.accent,
+                      flex: 1,
+                      minHeight: 0,
+                      borderRadius: 3,
+                      border: '1px dashed',
+                      borderColor: 'divider',
+                      background:
+                        'radial-gradient(circle at top, rgba(125, 211, 252, 0.08), transparent 42%), rgba(255,255,255,0.015)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      textAlign: 'center',
+                      px: 3,
                     }}
                   >
-                    Placeholder
-                  </Typography>
+                    <Stack spacing={1.25} alignItems="center">
+                      <Typography variant="h5">{panel.label}</Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        {panel.placeholder}
+                      </Typography>
+                    </Stack>
+                  </Box>
+
+                  <Stack direction="row" justifyContent="space-between" alignItems="center">
+                    <Typography variant="caption" color="text.secondary">
+                      Double-click header or use the corner control to expand.
+                    </Typography>
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        px: 1,
+                        py: 0.4,
+                        borderRadius: 999,
+                        border: '1px solid',
+                        borderColor: panel.accent,
+                        color: panel.accent,
+                      }}
+                    >
+                      Placeholder
+                    </Typography>
+                  </Stack>
                 </Stack>
-              </Stack>
+              )}
             </ExpandablePanel>
           </Box>
         )

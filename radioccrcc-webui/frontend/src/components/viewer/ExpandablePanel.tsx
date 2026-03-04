@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, type ReactNode } from 'react'
 import {
   Box,
   Button,
@@ -14,7 +14,7 @@ interface ExpandablePanelProps {
   accent: string
   expanded: boolean
   onToggleExpand: () => void
-  children: React.ReactNode
+  children: ReactNode
 }
 
 function ExpandablePanel({

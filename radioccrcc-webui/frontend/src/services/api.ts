@@ -183,7 +183,7 @@ function buildSliceQuery(query: SliceQuery): string {
   if (typeof query.wl === 'number') {
     params.set('wl', String(query.wl))
   }
-  if (query.layers && query.layers.length > 0) {
+  if (query.layers) {
     params.set('layers', query.layers.join(','))
   }
 
@@ -229,6 +229,13 @@ export const apiClient = {
     const response = await api.post<VolumeInfo>(
       `/datasets/${datasetId}/patients/${patientId}/series/${seriesId}/load`,
     )
+    return response.data
+  },
+
+  async getSliceBlob(axis: Axis, index: number, query: SliceQuery = {}): Promise<Blob> {
+    const response = await api.get<Blob>(`/slice/${axis}/${index}${buildSliceQuery(query)}`, {
+      responseType: 'blob',
+    })
     return response.data
   },
 

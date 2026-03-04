@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+nibabel
+numpy
+scikit-image
+Pillow
+trimesh
+pydantic
+python-multipart

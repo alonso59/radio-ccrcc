@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Env files
+.env
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+.udocker/
+
+# Logs / misc
+*.log
+
+# Archives
+*.tar
+*.tar.gz
+*.tgz
+
+# OS/editor noise
+.DS_Store

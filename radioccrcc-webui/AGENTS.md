@@ -242,15 +242,15 @@ VOI .npy series also render correctly through the same endpoints.
 
 **Tasks**:
 
-- [ ] **M3.1** Create `backend/app/services/mesh_generator.py`:
+- [x] **M3.1** Create `backend/app/services/mesh_generator.py`:
   - `generate_mesh(mask, label, spacing, smooth=True) → bytes`
     Use `skimage.measure.marching_cubes` to extract isosurface for given label.
     Optionally smooth with Laplacian.
     Export as GLB binary using `trimesh`.
   - Handle empty mask (no voxels for label) → return empty/null indicator.
-- [ ] **M3.2** Create API route in `backend/app/api/mesh.py`:
+- [x] **M3.2** Create API route in `backend/app/api/mesh.py`:
   - `GET /api/mesh/{label}?smooth=true` → return `model/gltf-binary` or 404
-- [ ] **M3.3** Verification:
+- [x] **M3.3** Verification:
   - Load series with seg, request mesh for label 2 (tumor)
   - Open returned GLB in an online viewer (e.g., gltf-viewer.donmccurdy.com)
   - Verify mesh geometry matches tumor shape
@@ -580,7 +580,7 @@ sequence. All features work through the container. Image size within budget.
 | M0        | Project Bootstrap & Dev Env        | ✅ Completed    | 2026-03-04 |
 | M1        | Backend: Data Discovery Service    | ✅ Completed    | 2026-03-04 |
 | M2        | Backend: Volume Loading & Slice    | ✅ Completed    | 2026-03-04 |
-| M3        | Backend: 3D Mesh Generation        | ⬜ Not started  |       |
+| M3        | Backend: 3D Mesh Generation        | ✅ Completed    | 2026-03-04 |
 | M4        | Backend: Settings & Auth           | ⬜ Not started  |       |
 | M5        | Frontend: Shell & Routing          | ⬜ Not started  |       |
 | M6        | Frontend: Dataset & Patient Pages  | ⬜ Not started  |       |

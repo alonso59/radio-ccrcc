@@ -70,9 +70,18 @@ export interface SliceQuery {
   opacity_3?: number
 }
 
+type AuthPromptHandler = () => Promise<string | null>
+
+interface RetryableRequestConfig {
+  _authRetried?: boolean
+}
+
 const api = axios.create({
   baseURL: '/api',
 })
+
+let authPromptHandler: AuthPromptHandler | null = null
+let pendingPrompt: Promise<string | null> | null = null
 
 api.interceptors.request.use((config) => {
   const token = getStoredAuthToken()
@@ -85,6 +94,31 @@ api.interceptors.request.use((config) => {
   return config
 })
 
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    if (!axios.isAxiosError(error) || error.response?.status !== 401 || !error.config) {
+      return Promise.reject(error)
+    }
+
+    const requestConfig = error.config as typeof error.config & RetryableRequestConfig
+    if (requestConfig._authRetried) {
+      return Promise.reject(error)
+    }
+
+    const token = await requestAuthToken()
+    if (!token) {
+      return Promise.reject(error)
+    }
+
+    setStoredAuthToken(token)
+    requestConfig._authRetried = true
+    requestConfig.headers = requestConfig.headers ?? {}
+    requestConfig.headers.Authorization = `Bearer ${token}`
+    return api.request(requestConfig)
+  },
+)
+
 export function getStoredAuthToken(): string {
   return window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) ?? ''
 }
@@ -96,6 +130,48 @@ export function setStoredAuthToken(token: string): void {
   }
 
   window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY)
+}
+
+export function registerAuthPromptHandler(handler: AuthPromptHandler | null): void {
+  authPromptHandler = handler
+}
+
+export function getApiErrorMessage(error: unknown): string {
+  if (axios.isAxiosError(error)) {
+    const detail = error.response?.data
+    if (typeof detail === 'string') {
+      return detail
+    }
+    if (
+      detail &&
+      typeof detail === 'object' &&
+      'detail' in detail &&
+      typeof detail.detail === 'string'
+    ) {
+      return detail.detail
+    }
+    if (error.message) {
+      return error.message
+    }
+  }
+
+  if (error instanceof Error && error.message) {
+    return error.message
+  }
+
+  return 'Unexpected API error'
+}
+
+async function requestAuthToken(): Promise<string | null> {
+  if (!authPromptHandler) {
+    return null
+  }
+  if (!pendingPrompt) {
+    pendingPrompt = authPromptHandler().finally(() => {
+      pendingPrompt = null
+    })
+  }
+  return pendingPrompt
 }
 
 function buildSliceQuery(query: SliceQuery): string {

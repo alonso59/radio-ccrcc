@@ -11,16 +11,26 @@ import {
 } from '@mui/material'
 import { Link as RouterLink, Route, Routes, useLocation } from 'react-router-dom'
 
+import LoginDialog from './components/LoginDialog'
 import DatasetSelectorPage from './pages/DatasetSelectorPage'
 import PatientListPage from './pages/PatientListPage'
 import ViewerPage from './pages/ViewerPage'
-import { apiClient } from './services/api'
+import {
+  apiClient,
+  getStoredAuthToken,
+  registerAuthPromptHandler,
+} from './services/api'
 
 type ApiStatus = 'checking' | 'online' | 'offline'
 
 function App() {
   const location = useLocation()
   const [apiStatus, setApiStatus] = useState<ApiStatus>('checking')
+  const [loginOpen, setLoginOpen] = useState(false)
+  const [storedToken, setStoredToken] = useState(getStoredAuthToken())
+  const [resolveToken, setResolveToken] = useState<((token: string | null) => void) | null>(
+    null,
+  )
 
   useEffect(() => {
     let active = true
@@ -42,6 +52,29 @@ function App() {
       active = false
     }
   }, [location.pathname])
+
+  useEffect(() => {
+    registerAuthPromptHandler(
+      () =>
+        new Promise((resolve) => {
+          setStoredToken(getStoredAuthToken())
+          setResolveToken(() => resolve)
+          setLoginOpen(true)
+        }),
+    )
+
+    return () => {
+      registerAuthPromptHandler(null)
+    }
+  }, [])
+
+  function closeLoginDialog(nextToken: string | null) {
+    setLoginOpen(false)
+    if (resolveToken) {
+      resolveToken(nextToken)
+      setResolveToken(null)
+    }
+  }
 
   return (
     <Box sx={{ minHeight: '100vh' }}>
@@ -122,6 +155,14 @@ function App() {
           </Routes>
         </Stack>
       </Container>
+
+      <LoginDialog
+        key={`${Number(loginOpen)}:${storedToken}`}
+        open={loginOpen}
+        initialToken={storedToken}
+        onCancel={() => closeLoginDialog(null)}
+        onSubmit={(token) => closeLoginDialog(token)}
+      />
     </Box>
   )
 }

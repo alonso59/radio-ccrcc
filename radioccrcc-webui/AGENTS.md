@@ -328,20 +328,20 @@ API client successfully calls `/api/health`.
 
 **Tasks**:
 
-- [ ] **M6.1** Implement `DatasetSelectorPage`:
+- [x] **M6.1** Implement `DatasetSelectorPage`:
   - Fetch `GET /api/datasets`
   - Display cards: dataset name, patient count, icons for nifti/seg/voi presence
   - Click card → navigate to patient list
-- [ ] **M6.2** Implement `PatientListPage`:
+- [x] **M6.2** Implement `PatientListPage`:
   - Fetch `GET /api/datasets/{dsid}/patients`
   - Display sortable table: patient_id, group, phase(s), #series, #seg, #voi
   - Search bar filtering by patient_id
   - Group and phase filter dropdowns
   - Click patient row → navigate to viewer
-- [ ] **M6.3** Create `LoginDialog` component:
+- [x] **M6.3** Create `LoginDialog` component:
   - If API returns 401, show token input dialog
   - Store token in localStorage, retry request
-- [ ] **M6.4** Verification:
+- [x] **M6.4** Verification:
   - Dataset820 appears as card with correct metadata
   - Patient table populates, search/filter works
   - Clicking a patient navigates to `/datasets/Dataset820/patients/case_00001/viewer`
@@ -583,7 +583,7 @@ sequence. All features work through the container. Image size within budget.
 | M3        | Backend: 3D Mesh Generation        | ✅ Completed    | 2026-03-04 |
 | M4        | Backend: Settings & Auth           | ✅ Completed    | 2026-03-04 |
 | M5        | Frontend: Shell & Routing          | ✅ Completed    | 2026-03-04 |
-| M6        | Frontend: Dataset & Patient Pages  | ⬜ Not started  |       |
+| M6        | Frontend: Dataset & Patient Pages  | ✅ Completed    | 2026-03-04 |
 | M7        | Frontend: 2×2 Viewer Layout        | ⬜ Not started  |       |
 | M8        | Frontend: 2D Slice Viewers         | ⬜ Not started  |       |
 | M9        | Frontend: 3D Surface Panel         | ⬜ Not started  |       |

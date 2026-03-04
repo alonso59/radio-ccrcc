@@ -37,6 +37,33 @@ interface SliceViewProps {
   ww: number
 }
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+/**
+ * Computes the rendered image content rect (as fractions of the container)
+ * for an `object-fit: contain` image. The image is centred with letterbox
+ * bars on the short axis.
+ */
+function computeContentRect(
+  containerW: number,
+  containerH: number,
+  naturalW: number,
+  naturalH: number,
+): { left: number; top: number; width: number; height: number } | null {
+  if (containerW === 0 || containerH === 0 || naturalW === 0 || naturalH === 0) {
+    return null
+  }
+  const scale = Math.min(containerW / naturalW, containerH / naturalH)
+  const rw = naturalW * scale
+  const rh = naturalH * scale
+  return {
+    left: (containerW - rw) / 2 / containerW,
+    top: (containerH - rh) / 2 / containerH,
+    width: rw / containerW,
+    height: rh / containerH,
+  }
+}
+
 function SliceView({
   accent,
   axis,
@@ -53,103 +80,115 @@ function SliceView({
   wl,
   ww,
 }: SliceViewProps) {
+  // ── Stale-while-revalidate state ─────────────────────────────────────────
   const [requestState, setRequestState] = useState<{
     key: string | null
     url: string | null
     error: string | null
-  }>({
-    key: null,
-    url: null,
-    error: null,
-  })
-  const [naturalSize, setNaturalSize] = useState<{
-    key: string | null
-    width: number
-    height: number
-  }>({
-    key: null,
+  }>({ key: null, url: null, error: null })
+  const [naturalSize, setNaturalSize] = useState<{ width: number; height: number }>({
     width: 0,
     height: 0,
   })
+  // Rendered image content rect as fractions of the viewport container.
+  // This resolves letterbox offsets so crosshairs and clicks are accurate.
+  const [contentRect, setContentRect] = useState<{
+    left: number
+    top: number
+    width: number
+    height: number
+  } | null>(null)
+
+  const viewportRef = useRef<HTMLDivElement | null>(null)
   const dragStateRef = useRef<{
     startX: number
     startY: number
     startWw: number
     startWl: number
   } | null>(null)
-  const wrapperRef = useRef<HTMLDivElement | null>(null)
+  const prevUrlRef = useRef<string | null>(null)
+  // Keep a stable ref to naturalSize so the ResizeObserver can read it without
+  // re-subscribing every time naturalSize changes.
+  const naturalSizeRef = useRef(naturalSize)
+
+  useEffect(() => {
+    naturalSizeRef.current = naturalSize
+  }, [naturalSize])
 
   const queryKey = JSON.stringify(query)
   const fetchKey = !disabled && requestKey ? `${requestKey}:${axis}:${index}:${queryKey}` : null
-  const isLoading = Boolean(fetchKey) && requestState.key !== fetchKey
-  const imageUrl = requestState.key === fetchKey ? requestState.url : null
-  const loadError = requestState.key === fetchKey ? requestState.error : null
 
+  const displayUrl = requestState.url
+  const isStale = Boolean(fetchKey) && requestState.key !== fetchKey
+  const isFirstLoad = !displayUrl && Boolean(fetchKey) && requestState.key !== fetchKey
+  const loadError = requestState.error && requestState.key === fetchKey ? requestState.error : null
+
+  // ── Slice fetch ───────────────────────────────────────────────────────────
   useEffect(() => {
-    if (!fetchKey) {
-      return
-    }
+    if (!fetchKey) return
+    if (requestState.key === fetchKey) return
 
     let active = true
-    apiClient
-      .getSliceBlob(axis, index, query)
+    apiClient.getSliceBlob(axis, index, query)
       .then((blob) => {
-        if (!active) {
-          return
-        }
+        if (!active) return
+        if (prevUrlRef.current) URL.revokeObjectURL(prevUrlRef.current)
         const nextUrl = URL.createObjectURL(blob)
-        setRequestState({
-          key: fetchKey,
-          url: nextUrl,
-          error: null,
-        })
+        prevUrlRef.current = nextUrl
+        setRequestState({ key: fetchKey, url: nextUrl, error: null })
       })
       .catch((requestError) => {
-        if (!active) {
-          return
-        }
-        setRequestState({
+        if (!active) return
+        setRequestState((prev) => ({
+          ...prev,
           key: fetchKey,
-          url: null,
           error: getApiErrorMessage(requestError),
-        })
+        }))
       })
-
-    return () => {
-      active = false
-    }
-  }, [axis, fetchKey, index, query])
+    return () => { active = false }
+  }, [axis, fetchKey, index, query, requestState.key])
 
   useEffect(() => {
     return () => {
-      if (requestState.url) {
-        URL.revokeObjectURL(requestState.url)
-      }
+      if (prevUrlRef.current) { URL.revokeObjectURL(prevUrlRef.current); prevUrlRef.current = null }
     }
-  }, [requestState.url])
+  }, [])
 
+  // ── ResizeObserver: keep contentRect in sync with panel size ─────────────
+  useEffect(() => {
+    const el = viewportRef.current
+    if (!el) return
+
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0]
+      if (!entry) return
+      const { width, height } = entry.contentRect
+      const { width: nw, height: nh } = naturalSizeRef.current
+      setContentRect(computeContentRect(width, height, nw, nh))
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, []) // intentionally empty – viewportRef.current is stable
+
+  // Recompute contentRect whenever naturalSize changes (new image loaded)
+  useEffect(() => {
+    const el = viewportRef.current
+    if (!el || naturalSize.width === 0) return
+    const { width, height } = el.getBoundingClientRect()
+    setContentRect(computeContentRect(width, height, naturalSize.width, naturalSize.height))
+  }, [naturalSize])
+
+  // ── Window/Level drag ─────────────────────────────────────────────────────
   useEffect(() => {
     function handleMouseMove(event: MouseEvent) {
       const dragState = dragStateRef.current
-      if (!dragState) {
-        return
-      }
-
-      onWindowLevelDrag(
-        dragState.startWw,
-        dragState.startWl,
-        event.clientX - dragState.startX,
-        event.clientY - dragState.startY,
-      )
+      if (!dragState) return
+      onWindowLevelDrag(dragState.startWw, dragState.startWl,
+        event.clientX - dragState.startX, event.clientY - dragState.startY)
     }
-
-    function handleMouseUp() {
-      dragStateRef.current = null
-    }
-
+    function handleMouseUp() { dragStateRef.current = null }
     window.addEventListener('mousemove', handleMouseMove)
     window.addEventListener('mouseup', handleMouseUp)
-
     return () => {
       window.removeEventListener('mousemove', handleMouseMove)
       window.removeEventListener('mouseup', handleMouseUp)
@@ -158,33 +197,49 @@ function SliceView({
 
   function handleWheel(event: ReactWheelEvent<HTMLDivElement>) {
     event.preventDefault()
-    if (disabled || maxIndex <= 0) {
-      return
-    }
-
+    if (disabled || maxIndex <= 0) return
     const delta = event.deltaY > 0 ? 1 : -1
     const nextIndex = Math.min(maxIndex, Math.max(0, index + delta))
-    if (nextIndex !== index) {
-      onSliceChange(nextIndex)
-    }
+    if (nextIndex !== index) onSliceChange(nextIndex)
   }
 
   function handleMouseDown(event: ReactMouseEvent<HTMLDivElement>) {
-    if (event.button !== 2) {
-      return
-    }
-
+    if (event.button !== 2) return
     event.preventDefault()
-    dragStateRef.current = {
-      startX: event.clientX,
-      startY: event.clientY,
-      startWw: ww,
-      startWl: wl,
-    }
+    dragStateRef.current = { startX: event.clientX, startY: event.clientY, startWw: ww, startWl: wl }
   }
 
-  const overlayX = `${crosshair.x * 100}%`
-  const overlayY = `${crosshair.y * 100}%`
+  // ── Click → crosshair (accounts for letterbox offsets) ───────────────────
+  function handleViewportClick(event: ReactMouseEvent<HTMLDivElement>) {
+    const rect = viewportRef.current?.getBoundingClientRect()
+    if (!rect || naturalSize.width === 0) return
+    const scale = Math.min(rect.width / naturalSize.width, rect.height / naturalSize.height)
+    const rw = naturalSize.width * scale
+    const rh = naturalSize.height * scale
+    const imgLeft = rect.left + (rect.width - rw) / 2
+    const imgTop = rect.top + (rect.height - rh) / 2
+    const x = (event.clientX - imgLeft) / rw
+    const y = (event.clientY - imgTop) / rh
+    onCrosshairChange({
+      x: Math.min(1, Math.max(0, x)),
+      y: Math.min(1, Math.max(0, y)),
+    })
+  }
+
+  // ── Crosshair overlay geometry ───────────────────────────────────────────
+  // Crosshair lines are positioned within the image content area (no letterbox)
+  const cr = contentRect ?? { left: 0, top: 0, width: 1, height: 1 }
+  // Convert crosshair fraction into position relative to the full viewport
+  const chLeft = `${(cr.left + crosshair.x * cr.width) * 100}%`
+  const chTop = `${(cr.top + crosshair.y * cr.height) * 100}%`
+  // Image content bounds for the crosshair lines' extents
+  const crLeft = `${cr.left * 100}%`
+  const crTop = `${cr.top * 100}%`
+  const crRight = `${(1 - cr.left - cr.width) * 100}%`
+  const crBottom = `${(1 - cr.top - cr.height) * 100}%`
+
+  const displayNaturalSize =
+    naturalSize.width > 0 ? `${naturalSize.width}×${naturalSize.height}` : ''
 
   return (
     <Box
@@ -196,146 +251,106 @@ function SliceView({
         position: 'relative',
         flex: 1,
         minHeight: 0,
-        borderRadius: 3,
-        backgroundColor: '#090909',
+        borderRadius: 1,
+        backgroundColor: '#000',
         border: '1px solid',
         borderColor: 'divider',
         overflow: 'hidden',
       }}
     >
       {errorText ? (
-        <Alert severity="warning" sx={{ m: 2 }}>
-          {errorText}
-        </Alert>
+        <Alert severity="warning" sx={{ m: 1 }}>{errorText}</Alert>
       ) : null}
 
       {!errorText ? (
         <Box
+          ref={viewportRef}
+          data-slice-viewport={axis}
+          onClick={displayUrl ? handleViewportClick : undefined}
           sx={{
             position: 'absolute',
             inset: 0,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            p: 2,
+            backgroundColor: '#000',
+            cursor: displayUrl ? 'crosshair' : 'default',
           }}
         >
-          <Box
-            data-slice-viewport={axis}
-            sx={{
-              width: 'auto',
-              height: '100%',
-              maxWidth: '100%',
-              aspectRatio: '1 / 1',
-              borderRadius: 3,
-              overflow: 'hidden',
-              backgroundColor: '#000',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            {imageUrl ? (
+          {displayUrl ? (
+            <>
+              {/* ── Image: fills panel, aspect-ratio preserved via object-fit ── */}
               <Box
-                ref={wrapperRef}
+                component="img"
+                src={displayUrl}
+                alt={`${axis} slice ${index + 1}`}
                 data-slice-axis={axis}
                 data-slice-index={index}
-                data-crosshair-x={crosshair.x.toFixed(4)}
-                data-crosshair-y={crosshair.y.toFixed(4)}
-                onClick={(event) => {
-                  const rect = event.currentTarget.getBoundingClientRect()
-                  const x = (event.clientX - rect.left) / rect.width
-                  const y = (event.clientY - rect.top) / rect.height
-                  onCrosshairChange({
-                    x: Math.min(1, Math.max(0, x)),
-                    y: Math.min(1, Math.max(0, y)),
-                  })
+                onLoad={(event: SyntheticEvent<HTMLImageElement>) => {
+                  const { naturalWidth: nw, naturalHeight: nh } = event.currentTarget
+                  setNaturalSize({ width: nw, height: nh })
                 }}
                 sx={{
-                  position: 'relative',
-                  display: 'inline-flex',
-                  maxWidth: '100%',
-                  maxHeight: '100%',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  cursor: 'crosshair',
+                  display: 'block',
+                  width: '100%',
+                  height: '100%',
+                  objectFit: 'contain',
+                  userSelect: 'none',
+                  opacity: isStale ? 0.65 : 1,
+                  transition: 'opacity 0.12s ease-out',
+                  imageRendering: 'pixelated',
                 }}
-              >
-                <Box
-                  component="img"
-                  src={imageUrl}
-                  alt={`${axis} slice ${index + 1}`}
-                  onLoad={(event: SyntheticEvent<HTMLImageElement>) => {
-                    const target = event.currentTarget
-                    setNaturalSize({
-                      key: fetchKey,
-                      width: target.naturalWidth,
-                      height: target.naturalHeight,
-                    })
-                  }}
-                  sx={{
-                    display: 'block',
-                    maxWidth: '100%',
-                    maxHeight: '100%',
-                    width: 'auto',
-                    height: 'auto',
-                    userSelect: 'none',
-                  }}
-                />
-                <Box
-                  sx={{
+              />
+
+              {/* ── Crosshair lines, clipped to the image content area ─────── */}
+              {contentRect ? (
+                <Box sx={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+                  {/* Vertical line */}
+                  <Box sx={{
                     position: 'absolute',
-                    inset: 0,
-                    pointerEvents: 'none',
-                  }}
-                >
-                  <Box
-                    data-crosshair-line="vertical"
-                    sx={{
-                      position: 'absolute',
-                      left: overlayX,
-                      top: 0,
-                      bottom: 0,
-                      width: 2,
-                      transform: 'translateX(-50%)',
-                      backgroundColor: accent,
-                      opacity: 0.95,
-                      boxShadow: `0 0 10px ${accent}`,
-                    }}
-                  />
-                  <Box
-                    data-crosshair-line="horizontal"
-                    sx={{
-                      position: 'absolute',
-                      left: 0,
-                      right: 0,
-                      top: overlayY,
-                      height: 2,
-                      transform: 'translateY(-50%)',
-                      backgroundColor: accent,
-                      opacity: 0.95,
-                      boxShadow: `0 0 10px ${accent}`,
-                    }}
-                  />
+                    left: chLeft,
+                    top: crTop,
+                    bottom: crBottom,
+                    width: '1.5px',
+                    transform: 'translateX(-50%)',
+                    backgroundColor: accent,
+                    opacity: 0.85,
+                  }} />
+                  {/* Horizontal line */}
+                  <Box sx={{
+                    position: 'absolute',
+                    left: crLeft,
+                    right: crRight,
+                    top: chTop,
+                    height: '1.5px',
+                    transform: 'translateY(-50%)',
+                    backgroundColor: accent,
+                    opacity: 0.85,
+                  }} />
                 </Box>
-              </Box>
-            ) : isLoading ? (
-              <Stack spacing={1} alignItems="center">
-                <CircularProgress size={28} />
-                <Typography variant="body2" color="text.secondary">
-                  Fetching {axis} slice...
-                </Typography>
-              </Stack>
-            ) : loadError ? (
-              <Alert severity="error">{loadError}</Alert>
-            ) : (
-              <Stack spacing={1} alignItems="center">
-                <Typography variant="body2" color="text.secondary">
-                  Select a series to load {axis} slices.
-                </Typography>
-              </Stack>
-            )}
-          </Box>
+              ) : null}
+
+              {/* Stale indicator */}
+              {isStale ? (
+                <CircularProgress size={20} thickness={5} sx={{
+                  position: 'absolute', top: 8, right: 8,
+                  color: accent, opacity: 0.7,
+                }} />
+              ) : null}
+            </>
+          ) : isFirstLoad ? (
+            <Stack spacing={1} alignItems="center" justifyContent="center" sx={{ height: '100%' }}>
+              <CircularProgress size={24} />
+              <Typography variant="body2" color="text.secondary">
+                Loading {axis} slice...
+              </Typography>
+            </Stack>
+          ) : loadError ? (
+            <Box sx={{ p: 2 }}><Alert severity="error">{loadError}</Alert></Box>
+          ) : (
+            <Stack spacing={1} alignItems="center" justifyContent="center" sx={{ height: '100%' }}>
+              <Typography variant="body2" color="text.secondary">
+                Select a series to view {axis} slices.
+              </Typography>
+            </Stack>
+          )}
         </Box>
       ) : null}
 
@@ -343,19 +358,13 @@ function SliceView({
         direction="row"
         spacing={1}
         justifyContent="space-between"
-        sx={{
-          position: 'absolute',
-          left: 12,
-          right: 12,
-          bottom: 10,
-          pointerEvents: 'none',
-        }}
+        sx={{ position: 'absolute', left: 8, right: 8, bottom: 6, pointerEvents: 'none' }}
       >
-        <Typography variant="caption" color="text.secondary">
+        <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.65rem' }}>
           Scroll to navigate
         </Typography>
-        <Typography variant="caption" color="text.secondary">
-          {naturalSize.key === fetchKey ? `${naturalSize.width}×${naturalSize.height}` : ''}
+        <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.4)', fontSize: '0.65rem' }}>
+          {displayNaturalSize}
         </Typography>
       </Stack>
     </Box>

@@ -239,6 +239,14 @@ export const apiClient = {
     return response.data
   },
 
+  async getMeshBlob(label: number, smooth = true): Promise<Blob> {
+    const params = new URLSearchParams({ smooth: String(smooth) })
+    const response = await api.get<Blob>(`/mesh/${label}?${params.toString()}`, {
+      responseType: 'blob',
+    })
+    return response.data
+  },
+
   sliceUrl(axis: Axis, index: number, query: SliceQuery = {}): string {
     return `/api/slice/${axis}/${index}${buildSliceQuery(query)}`
   },

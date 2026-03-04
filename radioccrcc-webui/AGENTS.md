@@ -437,19 +437,19 @@ volume interactively.
 
 **Tasks**:
 
-- [ ] **M9.1** Install `three` + `@react-three/fiber` + `@react-three/drei`
+- [x] **M9.1** Install `three` + `@react-three/fiber` + `@react-three/drei`
   (or `vtk.js` — choose the simpler option for mesh display).
-- [ ] **M9.2** Create `Surface3DView.tsx`:
+- [x] **M9.2** Create `Surface3DView.tsx`:
   - On series load, fetch GLB meshes for visible labels via `/api/mesh/{label}`
   - Render meshes with matching colors (cyan, yellow, magenta)
   - OrbitControls for rotate/pan/zoom
   - Dark background matching theme
-- [ ] **M9.3** Create `BlendSlider.tsx`:
+- [x] **M9.3** Create `BlendSlider.tsx`:
   - Global opacity slider (0.0–1.0) controlling mesh material transparency
-- [ ] **M9.4** Handle empty state:
+- [x] **M9.4** Handle empty state:
   - If no mask → dark panel with centered text "No segmentation available"
-- [ ] **M9.5** Wire layer visibility toggles (FR-22) to also show/hide 3D meshes.
-- [ ] **M9.6** Verification:
+- [x] **M9.5** Wire layer visibility toggles (FR-22) to also show/hide 3D meshes.
+- [x] **M9.6** Verification:
   - 3D panel shows kidney + tumor meshes for a seg-enabled series
   - Orbit/zoom works
   - Blend slider changes transparency
@@ -586,7 +586,7 @@ sequence. All features work through the container. Image size within budget.
 | M6        | Frontend: Dataset & Patient Pages  | ✅ Completed    | 2026-03-04 |
 | M7        | Frontend: 2×2 Viewer Layout        | ✅ Completed    | 2026-03-04 |
 | M8        | Frontend: 2D Slice Viewers         | ✅ Completed    |       |
-| M9        | Frontend: 3D Surface Panel         | ⬜ Not started  |       |
+| M9        | Frontend: 3D Surface Panel         | ✅ Completed    |       |
 | M10       | Frontend: Settings Persistence     | ⬜ Not started  |       |
 | M11       | Integration Testing & Polish       | ⬜ Not started  |       |
 | M12       | Containerization & Deployment      | ⬜ Not started  | Dockerfile created here only |

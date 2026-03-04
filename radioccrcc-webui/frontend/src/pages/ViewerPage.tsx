@@ -19,11 +19,13 @@ import {
   type SliceQuery,
   type VolumeInfo,
 } from '../services/api'
+import BlendSlider from '../components/viewer/BlendSlider'
 import LayerToggle from '../components/viewer/LayerToggle'
 import OpacitySlider from '../components/viewer/OpacitySlider'
 import SeriesSelector from '../components/viewer/SeriesSelector'
 import SliceSlider from '../components/viewer/SliceSlider'
 import SliceView from '../components/viewer/SliceView'
+import Surface3DView from '../components/viewer/Surface3DView'
 import ViewerGrid2x2 from '../components/viewer/ViewerGrid2x2'
 import WindowLevelControl from '../components/viewer/WindowLevelControl'
 import { useSliceNavigation } from '../components/viewer/useSliceNavigation'
@@ -39,6 +41,12 @@ const LAYER_META: Record<number, { label: string; color: string; defaultOpacity:
   1: { label: 'Kidney', color: '#22d3ee', defaultOpacity: 0.15 },
   2: { label: 'Tumor', color: '#facc15', defaultOpacity: 0.2 },
   3: { label: 'Cyst', color: '#e879f9', defaultOpacity: 0.15 },
+}
+
+const SURFACE_LAYER_COLORS: Record<number, string> = {
+  1: LAYER_META[1].color,
+  2: LAYER_META[2].color,
+  3: LAYER_META[3].color,
 }
 
 function ViewerPage() {
@@ -59,8 +67,9 @@ function ViewerPage() {
   const [layerState, setLayerState] = useState(() => ({
     1: { visible: true, opacity: LAYER_META[1].defaultOpacity },
     2: { visible: true, opacity: LAYER_META[2].defaultOpacity },
-    3: { visible: true, opacity: LAYER_META[3].defaultOpacity },
+    3: { visible: false, opacity: LAYER_META[3].defaultOpacity },
   }))
+  const [surfaceBlend, setSurfaceBlend] = useState(0.75)
   const windowLevel = useWindowLevel()
 
   const activeVolumeInfo =
@@ -192,44 +201,28 @@ function ViewerPage() {
       ),
     },
     surface: {
-      caption: '3D surface panel placeholder',
+      caption: activeVolumeInfo?.has_mask
+        ? 'Interactive segmentation surface'
+        : 'No segmentation available',
       content: (
         <Stack
-          spacing={2}
-          justifyContent="space-between"
+          spacing={0.75}
           sx={{
             height: '100%',
-            p: 2.5,
-            background:
-              'linear-gradient(180deg, rgba(255,255,255,0.015), rgba(255,255,255,0.03))',
+            p: 0.5,
+            background: 'transparent',
           }}
         >
-          <Box
-            sx={{
-              flex: 1,
-              minHeight: 0,
-              borderRadius: 3,
-              border: '1px dashed',
-              borderColor: 'divider',
-              background:
-                'radial-gradient(circle at top, rgba(255, 255, 255, 0.08), transparent 42%), rgba(255,255,255,0.015)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              textAlign: 'center',
-              px: 3,
-            }}
-          >
-            <Stack spacing={1.25} alignItems="center">
-              <Typography variant="h5">3D SURFACE</Typography>
-              <Typography variant="body2" color="text.secondary">
-                Surface rendering arrives in M9. The slice controls already sync
-                with the active series metadata.
-              </Typography>
-            </Stack>
-          </Box>
+          <Surface3DView
+            blend={surfaceBlend}
+            errorText={volumeError}
+            hasMask={Boolean(activeVolumeInfo?.has_mask)}
+            labelColors={SURFACE_LAYER_COLORS}
+            requestKey={activeVolumeInfo?.series_id ?? null}
+            visibleLabels={visibleLayers}
+          />
           <Typography variant="caption" color="text.secondary">
-            Active labels: {availableLabels.length > 0 ? availableLabels.join(', ') : 'none'}
+            Visible 3D labels: {visibleLayers.length > 0 ? visibleLayers.join(', ') : 'none'}
           </Typography>
         </Stack>
       ),
@@ -366,6 +359,11 @@ function ViewerPage() {
                 value={layerState[label as 1 | 2 | 3].opacity}
               />
             ))}
+            <BlendSlider
+              disabled={!activeVolumeInfo?.has_mask || visibleLayers.length === 0}
+              onChange={setSurfaceBlend}
+              value={surfaceBlend}
+            />
           </Stack>
         </Stack>
       </Paper>
@@ -409,12 +407,11 @@ function SlicePanel({
 }) {
   return (
     <Stack
-      spacing={1.5}
+      spacing={0.75}
       sx={{
         height: '100%',
-        p: 1.5,
-        background:
-          'linear-gradient(180deg, rgba(255,255,255,0.015), rgba(255,255,255,0.03))',
+        p: 0.5,
+        background: 'transparent',
       }}
     >
       <SliceView

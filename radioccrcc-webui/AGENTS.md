@@ -294,25 +294,25 @@ and API service layer.
 
 **Tasks**:
 
-- [ ] **M5.1** Install dependencies:
+- [x] **M5.1** Install dependencies:
   - `react-router-dom` (routing)
   - `@mui/material` + `@emotion/react` + `@emotion/styled` (UI components, dark theme)
   - `axios` (HTTP client)
-- [ ] **M5.2** Create dark theme in `frontend/src/styles/theme.ts`:
+- [x] **M5.2** Create dark theme in `frontend/src/styles/theme.ts`:
   - Background `#1e1e1e`, panels `#121212`, borders `#333`, text `#ddd`
-- [ ] **M5.3** Create typed API client in `frontend/src/services/api.ts`:
+- [x] **M5.3** Create typed API client in `frontend/src/services/api.ts`:
   - Functions for all backend endpoints
   - TypeScript interfaces matching Pydantic models
   - Auth token injection from localStorage
-- [ ] **M5.4** Create route structure in `App.tsx`:
+- [x] **M5.4** Create route structure in `App.tsx`:
   - `/` → `DatasetSelectorPage`
   - `/datasets/:dsid/patients` → `PatientListPage`
   - `/datasets/:dsid/patients/:pid/viewer` → `ViewerPage`
-- [ ] **M5.5** Create stub pages (empty dark containers with titles):
+- [x] **M5.5** Create stub pages (empty dark containers with titles):
   - `DatasetSelectorPage.tsx`
   - `PatientListPage.tsx`
   - `ViewerPage.tsx`
-- [ ] **M5.6** Verification:
+- [x] **M5.6** Verification:
   - Navigate between all three pages in browser
   - Dark theme applied consistently
   - API calls reach backend through Vite proxy
@@ -582,7 +582,7 @@ sequence. All features work through the container. Image size within budget.
 | M2        | Backend: Volume Loading & Slice    | ✅ Completed    | 2026-03-04 |
 | M3        | Backend: 3D Mesh Generation        | ✅ Completed    | 2026-03-04 |
 | M4        | Backend: Settings & Auth           | ✅ Completed    | 2026-03-04 |
-| M5        | Frontend: Shell & Routing          | ⬜ Not started  |       |
+| M5        | Frontend: Shell & Routing          | ✅ Completed    | 2026-03-04 |
 | M6        | Frontend: Dataset & Patient Pages  | ⬜ Not started  |       |
 | M7        | Frontend: 2×2 Viewer Layout        | ⬜ Not started  |       |
 | M8        | Frontend: 2D Slice Viewers         | ⬜ Not started  |       |

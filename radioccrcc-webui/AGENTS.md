@@ -194,38 +194,38 @@ Discovery handles datasets with only `nifti/`, with `nifti/ + seg/`, and with
 
 **Tasks**:
 
-- [ ] **M2.1** Create `backend/app/services/nifti_loader.py`:
+- [x] **M2.1** Create `backend/app/services/nifti_loader.py`:
   - `load_nifti(path) → (np.ndarray, spacing_tuple)`
     Uses `nibabel` + `as_closest_canonical` for RAS reorientation.
     Returns float32 array shape (X, Y, Z) + spacing (sx, sy, sz).
   - Reference: `nifti_visualizer.ipynb` Cell 3 (`CaseReviewState.load_current`)
-- [ ] **M2.2** Create `backend/app/services/numpy_loader.py`:
+- [x] **M2.2** Create `backend/app/services/numpy_loader.py`:
   - `load_numpy(path) → np.ndarray`
     `np.load(path)` returning shape (X, Y, Z).
   - Reference: `voi_visualizer.ipynb` Cell 3
-- [ ] **M2.3** Create `backend/app/services/mask_loader.py`:
+- [x] **M2.3** Create `backend/app/services/mask_loader.py`:
   - `load_mask(path, is_nifti: bool) → np.ndarray`
     Load seg (.nii.gz) or voi mask (.npy). Handle 4D by taking `[..., 0]`.
     Return uint8 array.
   - Reference: `nifti_visualizer.ipynb` Cell 3 (seg loading block)
-- [ ] **M2.4** Create `backend/app/services/slice_renderer.py`:
+- [x] **M2.4** Create `backend/app/services/slice_renderer.py`:
   - `render_slice(volume, mask, axis, index, ww, wl, layers, layer_config) → bytes`
     Extract 2D slice (axial/coronal/sagittal), apply W/L normalization,
     optionally overlay mask contours + fill, encode as PNG.
   - HU normalization: reference `visualizer_utils.py` → `hu_to_display()`
   - Overlay: reference `visualizer_utils.py` → `overlay_multi_layer_mask()`
   - Use `Pillow` for PNG encoding.
-- [ ] **M2.5** Create `backend/app/services/volume_cache.py`:
+- [x] **M2.5** Create `backend/app/services/volume_cache.py`:
   - In-memory cache holding current volume + mask (max 2 volumes).
   - `load_series(dataset_id, patient_id, series_id) → VolumeInfo`
   - `get_current() → (volume, mask, spacing)`
   - Evicts on new series load.
-- [ ] **M2.6** Create API routes in `backend/app/api/slices.py`:
+- [x] **M2.6** Create API routes in `backend/app/api/slices.py`:
   - `POST /api/datasets/{dsid}/patients/{pid}/series/{sid}/load`
     → Load volume into cache, return `VolumeInfo {shape, spacing, has_mask, labels}`.
   - `GET /api/slice/{axis}/{index}?ww=400&wl=50&layers=1,2&opacity_1=0.15&opacity_2=0.20`
     → Return `image/png`.
-- [ ] **M2.7** Manual verification:
+- [x] **M2.7** Manual verification:
   - Load a Dataset820 NIfTI series via POST
   - Fetch axial slice 100 as PNG, open in viewer
   - Fetch coronal slice with tumor overlay visible
@@ -579,7 +579,7 @@ sequence. All features work through the container. Image size within budget.
 |-----------|------------------------------------|----------------|-------|
 | M0        | Project Bootstrap & Dev Env        | ✅ Completed    | 2026-03-04 |
 | M1        | Backend: Data Discovery Service    | ✅ Completed    | 2026-03-04 |
-| M2        | Backend: Volume Loading & Slice    | ⬜ Not started  |       |
+| M2        | Backend: Volume Loading & Slice    | ✅ Completed    | 2026-03-04 |
 | M3        | Backend: 3D Mesh Generation        | ⬜ Not started  |       |
 | M4        | Backend: Settings & Auth           | ⬜ Not started  |       |
 | M5        | Frontend: Shell & Routing          | ⬜ Not started  |       |

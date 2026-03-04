@@ -1,61 +1,114 @@
-import { Box, Button, Grid, Paper, Stack, Typography } from '@mui/material'
+import {
+  Box,
+  Button,
+  Chip,
+  Divider,
+  Paper,
+  Stack,
+  Typography,
+} from '@mui/material'
+import { useState } from 'react'
 import { Link as RouterLink, useParams } from 'react-router-dom'
+
+import type { SeriesInfo } from '../services/api'
+import SeriesSelector from '../components/viewer/SeriesSelector'
+import ViewerGrid2x2 from '../components/viewer/ViewerGrid2x2'
 
 function ViewerPage() {
   const { dsid = 'unknown-dataset', pid = 'unknown-patient' } = useParams<{
     dsid: string
     pid: string
   }>()
+  const [selectedSeries, setSelectedSeries] = useState<SeriesInfo | null>(null)
 
   return (
     <Stack spacing={3}>
       <Paper
         elevation={0}
         sx={{
-          px: { xs: 3, md: 5 },
-          py: { xs: 3, md: 4 },
+          px: { xs: 3, md: 4 },
+          py: { xs: 3, md: 3.5 },
         }}
       >
-        <Typography variant="overline" color="text.secondary">
-          Viewer Route
-        </Typography>
-        <Typography variant="h3" sx={{ mt: 1 }}>
-          Viewer Page
-        </Typography>
-        <Typography variant="body1" color="text.secondary" sx={{ mt: 2, maxWidth: 760 }}>
-          The 2×2 diagnostic workspace lands here in later milestones. The route
-          already carries the selected dataset and patient context.
-        </Typography>
+        <Stack spacing={3}>
+          <Stack
+            direction={{ xs: 'column', xl: 'row' }}
+            spacing={2.5}
+            justifyContent="space-between"
+          >
+            <Stack spacing={1.25} maxWidth={420}>
+              <Typography variant="overline" color="text.secondary">
+                Viewer Workspace
+              </Typography>
+              <Typography variant="h3">{pid}</Typography>
+              <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                <Chip label={dsid} color="primary" variant="outlined" />
+                <Chip
+                  label={selectedSeries?.filename ?? 'Select a series'}
+                  variant="outlined"
+                />
+              </Stack>
+            </Stack>
 
-        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} sx={{ mt: 3 }}>
-          <Button component={RouterLink} to={`/datasets/${dsid}/patients`} variant="outlined">
-            Back to Patient List
-          </Button>
-          <Button component={RouterLink} to="/" variant="contained">
-            Return Home
-          </Button>
+            <SeriesSelector
+              datasetId={dsid}
+              patientId={pid}
+              onSeriesChange={setSelectedSeries}
+            />
+          </Stack>
+
+          <Stack
+            direction={{ xs: 'column', lg: 'row' }}
+            spacing={1}
+            alignItems={{ lg: 'center' }}
+            justifyContent="space-between"
+          >
+            <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+              {['Kidney', 'Tumor', 'Cyst'].map((label) => (
+                <Chip key={label} label={label} variant="outlined" size="small" />
+              ))}
+            </Stack>
+
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
+              <Button
+                component={RouterLink}
+                to={`/datasets/${dsid}/patients`}
+                variant="outlined"
+              >
+                Back to Patient List
+              </Button>
+              <Button component={RouterLink} to="/" variant="contained">
+                Return Home
+              </Button>
+            </Stack>
+          </Stack>
         </Stack>
       </Paper>
 
-      <Grid container spacing={2}>
-        {[
-          ['Dataset', dsid],
-          ['Patient', pid],
-          ['Viewer Mode', 'Stub shell'],
-          ['Next Milestone', 'M6 dataset and patient pages'],
-        ].map(([label, value]) => (
-          <Grid size={{ xs: 12, sm: 6 }} key={label}>
-            <Paper elevation={0} sx={{ p: 2.5, minHeight: 132 }}>
-              <Typography variant="overline" color="text.secondary">
-                {label}
-              </Typography>
-              <Box sx={{ mt: 1.5 }}>
-                <Typography variant="h5">{value}</Typography>
-              </Box>
-            </Paper>
-          </Grid>
-        ))}
-      </Grid>
+      <ViewerGrid2x2 />
+
+      <Paper elevation={0} sx={{ px: { xs: 3, md: 4 }, py: 2.5 }}>
+        <Stack
+          direction={{ xs: 'column', lg: 'row' }}
+          spacing={2}
+          justifyContent="space-between"
+          divider={<Divider orientation="vertical" flexItem sx={{ display: { xs: 'none', lg: 'block' } }} />}
+        >
+          <Box sx={{ flex: 1 }}>
+            <Typography variant="overline" color="text.secondary">
+              Bottom Bar
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Slice sliders, W/L presets, and opacity controls land here in M8.
+            </Typography>
+          </Box>
+          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+            {['Soft Tissue', 'Bone', 'Lung', 'Brain'].map((preset) => (
+              <Chip key={preset} label={preset} variant="outlined" />
+            ))}
+          </Stack>
+        </Stack>
+      </Paper>
     </Stack>
   )
 }

@@ -357,25 +357,25 @@ Search and filter work. Auth dialog appears when token is required.
 
 **Tasks**:
 
-- [ ] **M7.1** Create `ViewerGrid2x2.tsx`:
+- [x] **M7.1** Create `ViewerGrid2x2.tsx`:
   - CSS Grid: 2 columns × 2 rows, gap 2px, dark borders
   - Panels: [Axial, Sagittal] / [Coronal, 3D]
   - Each panel has a small label badge (top-left) with colored border matching
     crosshair convention (axial=yellow, sagittal=green, coronal=red, 3D=white)
-- [ ] **M7.2** Create `ExpandablePanel.tsx`:
+- [x] **M7.2** Create `ExpandablePanel.tsx`:
   - Wraps each panel content
   - Double-click header → expand to full area (CSS: `grid-column: 1/-1; grid-row: 1/-1`)
   - Double-click again or Esc → restore
   - Small expand icon button as alternative trigger
-- [ ] **M7.3** Create `SeriesSelector.tsx`:
+- [x] **M7.3** Create `SeriesSelector.tsx`:
   - Fetch series list for current patient
   - Dropdown to switch series
   - Display phase badge + seg/voi indicators
-- [ ] **M7.4** Wire `ViewerPage.tsx`:
+- [x] **M7.4** Wire `ViewerPage.tsx`:
   - Header: patient ID + series selector + layer controls (stubs)
   - Body: `ViewerGrid2x2` with four placeholder dark panels
   - Bottom bar: placeholder for sliders and W/L
-- [ ] **M7.5** Verification:
+- [x] **M7.5** Verification:
   - Grid renders with correct proportions
   - Expand/restore works on each panel
   - Series dropdown populates from API
@@ -584,7 +584,7 @@ sequence. All features work through the container. Image size within budget.
 | M4        | Backend: Settings & Auth           | ✅ Completed    | 2026-03-04 |
 | M5        | Frontend: Shell & Routing          | ✅ Completed    | 2026-03-04 |
 | M6        | Frontend: Dataset & Patient Pages  | ✅ Completed    | 2026-03-04 |
-| M7        | Frontend: 2×2 Viewer Layout        | ⬜ Not started  |       |
+| M7        | Frontend: 2×2 Viewer Layout        | ✅ Completed    | 2026-03-04 |
 | M8        | Frontend: 2D Slice Viewers         | ⬜ Not started  |       |
 | M9        | Frontend: 3D Surface Panel         | ⬜ Not started  |       |
 | M10       | Frontend: Settings Persistence     | ⬜ Not started  |       |

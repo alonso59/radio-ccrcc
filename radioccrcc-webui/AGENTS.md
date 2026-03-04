@@ -266,19 +266,19 @@ each produce correct surfaces. Missing labels return 404.
 
 **Tasks**:
 
-- [ ] **M4.1** Create `backend/app/middleware/auth.py`:
+- [x] **M4.1** Create `backend/app/middleware/auth.py`:
   - If `RADIOLOGY_UI_TOKEN` is set (non-empty), require `Authorization: Bearer <token>`
     header on all `/api/*` routes except `/api/health`.
   - If token is empty, skip auth (local dev mode).
-- [ ] **M4.2** Create `backend/app/services/settings_store.py`:
+- [x] **M4.2** Create `backend/app/services/settings_store.py`:
   - Read/write `viewer_settings.json` in a writable directory (not on mounted data).
   - Default location: `~/.radiology-webui/settings.json` or `/tmp/radiology-webui/settings.json` inside container.
   - Schema: `{dataset_id: {last_patient, last_series, ww, wl, layers_visible, layers_opacity}}`
-- [ ] **M4.3** Create API routes in `backend/app/api/settings.py`:
+- [x] **M4.3** Create API routes in `backend/app/api/settings.py`:
   - `GET /api/settings` → current settings
   - `PUT /api/settings` → save settings
-- [ ] **M4.4** Wire auth middleware into `main.py`.
-- [ ] **M4.5** Verification:
+- [x] **M4.4** Wire auth middleware into `main.py`.
+- [x] **M4.5** Verification:
   - Set `RADIOLOGY_UI_TOKEN=test123`, verify 401 without token, 200 with token
   - PUT settings, restart server, GET settings → persisted
 
@@ -581,7 +581,7 @@ sequence. All features work through the container. Image size within budget.
 | M1        | Backend: Data Discovery Service    | ✅ Completed    | 2026-03-04 |
 | M2        | Backend: Volume Loading & Slice    | ✅ Completed    | 2026-03-04 |
 | M3        | Backend: 3D Mesh Generation        | ✅ Completed    | 2026-03-04 |
-| M4        | Backend: Settings & Auth           | ⬜ Not started  |       |
+| M4        | Backend: Settings & Auth           | ✅ Completed    | 2026-03-04 |
 | M5        | Frontend: Shell & Routing          | ⬜ Not started  |       |
 | M6        | Frontend: Dataset & Patient Pages  | ⬜ Not started  |       |
 | M7        | Frontend: 2×2 Viewer Layout        | ⬜ Not started  |       |

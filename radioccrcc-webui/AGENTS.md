@@ -159,7 +159,7 @@ series, and masks from the mounted data path.
 
 **Tasks**:
 
-- [ ] **M1.1** Create `backend/app/services/discovery.py`:
+- [x] **M1.1** Create `backend/app/services/discovery.py`:
   - `list_datasets(data_root) → list[DatasetSummary]`
     Scan `data_root/` for subdirectories matching `Dataset*`.
     For each, detect presence of `nifti/`, `seg/`, `voi/`, `manifest.csv`.
@@ -170,14 +170,14 @@ series, and masks from the mounted data path.
     List NIfTI volumes for this patient. For each, check if matching seg exists
     (strip `_0000`). Check if VOI crops exist under `voi/images/`.
     Return list of series with type (nifti/voi), phase, has_seg flag, paths.
-- [ ] **M1.2** Create Pydantic models in `backend/app/models/`:
+- [x] **M1.2** Create Pydantic models in `backend/app/models/`:
   - `dataset.py`: `DatasetSummary`, `PatientSummary`, `SeriesInfo`, `VolumeInfo`
   - Use `from __future__ import annotations` for forward refs
-- [ ] **M1.3** Create API routes in `backend/app/api/datasets.py`:
+- [x] **M1.3** Create API routes in `backend/app/api/datasets.py`:
   - `GET /api/datasets` → calls `list_datasets`
   - `GET /api/datasets/{dsid}/patients` → calls `discover_patients`
   - `GET /api/datasets/{dsid}/patients/{pid}/series` → calls `discover_series`
-- [ ] **M1.4** Write tests (or manual curl verification):
+- [x] **M1.4** Write tests (or manual curl verification):
   - Point `DATA_ROOT` at `../../data/dataset` (parent repo)
   - Verify Dataset820 is discovered with correct patient count
   - Verify `case_00001` returns series with NIfTI path + seg flag
@@ -578,7 +578,7 @@ sequence. All features work through the container. Image size within budget.
 | Milestone | Title                              | Status         | Notes |
 |-----------|------------------------------------|----------------|-------|
 | M0        | Project Bootstrap & Dev Env        | ✅ Completed    | 2026-03-04 |
-| M1        | Backend: Data Discovery Service    | ⬜ Not started  |       |
+| M1        | Backend: Data Discovery Service    | ✅ Completed    | 2026-03-04 |
 | M2        | Backend: Volume Loading & Slice    | ⬜ Not started  |       |
 | M3        | Backend: 3D Mesh Generation        | ⬜ Not started  |       |
 | M4        | Backend: Settings & Auth           | ⬜ Not started  |       |

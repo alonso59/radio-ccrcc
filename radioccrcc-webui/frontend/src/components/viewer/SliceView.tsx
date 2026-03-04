@@ -220,106 +220,122 @@ function SliceView({
             p: 2,
           }}
         >
-          {imageUrl ? (
-            <Box
-              ref={wrapperRef}
-              data-slice-axis={axis}
-              data-slice-index={index}
-              data-crosshair-x={crosshair.x.toFixed(4)}
-              data-crosshair-y={crosshair.y.toFixed(4)}
-              onClick={(event) => {
-                const rect = event.currentTarget.getBoundingClientRect()
-                const x = (event.clientX - rect.left) / rect.width
-                const y = (event.clientY - rect.top) / rect.height
-                onCrosshairChange({
-                  x: Math.min(1, Math.max(0, x)),
-                  y: Math.min(1, Math.max(0, y)),
-                })
-              }}
-              sx={{
-                position: 'relative',
-                display: 'inline-flex',
-                maxWidth: '100%',
-                maxHeight: '100%',
-                alignItems: 'center',
-                justifyContent: 'center',
-                cursor: 'crosshair',
-              }}
-            >
+          <Box
+            data-slice-viewport={axis}
+            sx={{
+              width: 'auto',
+              height: '100%',
+              maxWidth: '100%',
+              aspectRatio: '1 / 1',
+              borderRadius: 3,
+              overflow: 'hidden',
+              backgroundColor: '#000',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            {imageUrl ? (
               <Box
-                component="img"
-                src={imageUrl}
-                alt={`${axis} slice ${index + 1}`}
-                onLoad={(event: SyntheticEvent<HTMLImageElement>) => {
-                  const target = event.currentTarget
-                  setNaturalSize({
-                    key: fetchKey,
-                    width: target.naturalWidth,
-                    height: target.naturalHeight,
+                ref={wrapperRef}
+                data-slice-axis={axis}
+                data-slice-index={index}
+                data-crosshair-x={crosshair.x.toFixed(4)}
+                data-crosshair-y={crosshair.y.toFixed(4)}
+                onClick={(event) => {
+                  const rect = event.currentTarget.getBoundingClientRect()
+                  const x = (event.clientX - rect.left) / rect.width
+                  const y = (event.clientY - rect.top) / rect.height
+                  onCrosshairChange({
+                    x: Math.min(1, Math.max(0, x)),
+                    y: Math.min(1, Math.max(0, y)),
                   })
                 }}
                 sx={{
-                  display: 'block',
+                  position: 'relative',
+                  display: 'inline-flex',
                   maxWidth: '100%',
                   maxHeight: '100%',
-                  width: 'auto',
-                  height: 'auto',
-                  userSelect: 'none',
-                }}
-              />
-              <Box
-                sx={{
-                  position: 'absolute',
-                  inset: 0,
-                  pointerEvents: 'none',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'crosshair',
                 }}
               >
                 <Box
-                  data-crosshair-line="vertical"
+                  component="img"
+                  src={imageUrl}
+                  alt={`${axis} slice ${index + 1}`}
+                  onLoad={(event: SyntheticEvent<HTMLImageElement>) => {
+                    const target = event.currentTarget
+                    setNaturalSize({
+                      key: fetchKey,
+                      width: target.naturalWidth,
+                      height: target.naturalHeight,
+                    })
+                  }}
                   sx={{
-                    position: 'absolute',
-                    left: overlayX,
-                    top: 0,
-                    bottom: 0,
-                    width: 2,
-                    transform: 'translateX(-50%)',
-                    backgroundColor: accent,
-                    opacity: 0.95,
-                    boxShadow: `0 0 10px ${accent}`,
+                    display: 'block',
+                    maxWidth: '100%',
+                    maxHeight: '100%',
+                    width: 'auto',
+                    height: 'auto',
+                    userSelect: 'none',
                   }}
                 />
                 <Box
-                  data-crosshair-line="horizontal"
                   sx={{
                     position: 'absolute',
-                    left: 0,
-                    right: 0,
-                    top: overlayY,
-                    height: 2,
-                    transform: 'translateY(-50%)',
-                    backgroundColor: accent,
-                    opacity: 0.95,
-                    boxShadow: `0 0 10px ${accent}`,
+                    inset: 0,
+                    pointerEvents: 'none',
                   }}
-                />
+                >
+                  <Box
+                    data-crosshair-line="vertical"
+                    sx={{
+                      position: 'absolute',
+                      left: overlayX,
+                      top: 0,
+                      bottom: 0,
+                      width: 2,
+                      transform: 'translateX(-50%)',
+                      backgroundColor: accent,
+                      opacity: 0.95,
+                      boxShadow: `0 0 10px ${accent}`,
+                    }}
+                  />
+                  <Box
+                    data-crosshair-line="horizontal"
+                    sx={{
+                      position: 'absolute',
+                      left: 0,
+                      right: 0,
+                      top: overlayY,
+                      height: 2,
+                      transform: 'translateY(-50%)',
+                      backgroundColor: accent,
+                      opacity: 0.95,
+                      boxShadow: `0 0 10px ${accent}`,
+                    }}
+                  />
+                </Box>
               </Box>
-            </Box>
-          ) : isLoading ? (
-            <Stack spacing={1} alignItems="center">
-              <CircularProgress size={28} />
-              <Typography variant="body2" color="text.secondary">
-                Fetching {axis} slice...
-              </Typography>
-            </Stack>
-          ) : loadError ? (
-            <Alert severity="error">{loadError}</Alert>
-          ) : (
-            <Stack spacing={1} alignItems="center">
-              <Typography variant="body2" color="text.secondary">
-                Select a series to load {axis} slices.
-              </Typography>
-            </Stack>
-          )}
+            ) : isLoading ? (
+              <Stack spacing={1} alignItems="center">
+                <CircularProgress size={28} />
+                <Typography variant="body2" color="text.secondary">
+                  Fetching {axis} slice...
+                </Typography>
+              </Stack>
+            ) : loadError ? (
+              <Alert severity="error">{loadError}</Alert>
+            ) : (
+              <Stack spacing={1} alignItems="center">
+                <Typography variant="body2" color="text.secondary">
+                  Select a series to load {axis} slices.
+                </Typography>
+              </Stack>
+            )}
+          </Box>
         </Box>
       ) : null}
 

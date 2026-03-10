@@ -50,6 +50,7 @@ function ExpandablePanel({
       sx={{
         height: '100%',
         minHeight: 0,
+        minWidth: 0,
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
@@ -59,14 +60,14 @@ function ExpandablePanel({
       }}
     >
       <Stack
-        direction="row"
-        alignItems="center"
+        direction={{ xs: 'column', sm: 'row' }}
+        alignItems={{ xs: 'flex-start', sm: 'center' }}
         justifyContent="space-between"
         spacing={1.5}
         onDoubleClick={onToggleExpand}
         sx={{
-          px: 1.75,
-          py: 1.25,
+          px: 1.25,
+          py: 0.6,
           borderBottom: '1px solid',
           borderColor: 'divider',
           backgroundColor: 'rgba(255, 255, 255, 0.02)',
@@ -74,7 +75,7 @@ function ExpandablePanel({
           userSelect: 'none',
         }}
       >
-        <Stack direction="row" spacing={1.25} alignItems="center">
+        <Stack direction="row" spacing={1.25} alignItems="center" sx={{ minWidth: 0, flex: 1 }}>
           <Box
             sx={{
               px: 1,
@@ -90,7 +91,17 @@ function ExpandablePanel({
               {axisLabel}
             </Typography>
           </Box>
-          <Typography variant="body2" color="text.secondary">
+          <Typography
+            variant="body2"
+            color="text.secondary"
+            sx={{
+              minWidth: 0,
+              display: '-webkit-box',
+              overflow: 'hidden',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical',
+            }}
+          >
             {caption}
           </Typography>
         </Stack>
@@ -102,14 +113,14 @@ function ExpandablePanel({
               event.stopPropagation()
               onToggleExpand()
             }}
-            sx={{ color: 'text.secondary', minWidth: 0, px: 1.25 }}
+            sx={{ color: 'text.secondary', minWidth: 0, px: 1.25, alignSelf: { xs: 'flex-end', sm: 'center' } }}
           >
             {expanded ? 'Restore' : 'Expand'}
           </Button>
         </Tooltip>
       </Stack>
 
-      <Box sx={{ flex: 1, minHeight: 0 }}>{children}</Box>
+      <Box sx={{ flex: 1, minHeight: 0, minWidth: 0 }}>{children}</Box>
     </Paper>
   )
 }

@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import csv
 import re
-from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from app.models.dataset import DatasetSummary, PatientSummary, SeriesInfo
+from app.models.dataset import DatasetSummary, PatientSummary, SeriesInfo, SeriesSource
 
 
 CASE_ID_PATTERN = re.compile(r"(case_\d{5})")
@@ -65,7 +64,6 @@ def list_datasets(data_root: Path | str) -> list[DatasetSummary]:
         datasets.append(
             DatasetSummary(
                 dataset_id=dataset_path.name,
-                path=str(dataset_path),
                 patient_count=patient_count,
                 has_nifti=has_nifti,
                 has_seg=has_seg,
@@ -132,15 +130,29 @@ def discover_patients(dataset_path: Path | str) -> list[PatientSummary]:
 
 def discover_series(dataset_path: Path | str, patient_id: str) -> list[SeriesInfo]:
     dataset_path = Path(dataset_path).expanduser().resolve()
-    nifti_entries = [
-        entry for entry in _collect_nifti_entries(dataset_path) if entry["patient_id"] == patient_id
-    ]
-    voi_entries = [
-        entry for entry in _collect_voi_entries(dataset_path) if entry["patient_id"] == patient_id
+    entries = _collect_series_entries(dataset_path, patient_filter=patient_id)
+    return [
+        SeriesInfo(
+            series_id=entry["series_id"],
+            patient_id=entry["patient_id"],
+            type=entry["type"],
+            group=entry["group"],
+            phase=entry["phase"],
+            laterality=entry.get("laterality"),
+            filename=entry["filename"],
+            has_seg=entry["has_seg"],
+        )
+        for entry in entries
     ]
 
-    series = [
-        SeriesInfo(
+
+def resolve_series_source(dataset_path: Path | str, patient_id: str, series_id: str) -> SeriesSource:
+    dataset_path = Path(dataset_path).expanduser().resolve()
+    entries = _collect_series_entries(dataset_path, patient_filter=patient_id)
+    for entry in entries:
+        if entry["series_id"] != series_id:
+            continue
+        return SeriesSource(
             series_id=entry["series_id"],
             patient_id=entry["patient_id"],
             type=entry["type"],
@@ -152,9 +164,10 @@ def discover_series(dataset_path: Path | str, patient_id: str) -> list[SeriesInf
             mask_path=entry["mask_path"],
             has_seg=entry["has_seg"],
         )
-        for entry in sorted(nifti_entries + voi_entries, key=_series_sort_key)
-    ]
-    return series
+
+    raise FileNotFoundError(
+        f"Series '{series_id}' for patient '{patient_id}' was not found in {dataset_path.name}"
+    )
 
 
 def _merge_patient_metadata(patient: dict[str, Any], entry: dict[str, Any]) -> None:
@@ -202,7 +215,15 @@ def _strip_nifti_suffix(filename: str) -> str:
     return Path(filename).stem
 
 
-def _nifti_files(nifti_dir: Path) -> list[Path]:
+def _nifti_files(nifti_dir: Path, patient_filter: str | None = None) -> list[Path]:
+    if patient_filter:
+        files = [
+            path
+            for path in nifti_dir.glob(f"*{patient_filter}*")
+            if path.is_file() and any(path.name.endswith(suffix) for suffix in NIFTI_SUFFIXES)
+        ]
+        return sorted(files, key=lambda path: path.name)
+
     files: list[Path] = []
     for path in nifti_dir.iterdir():
         if path.is_file() and any(path.name.endswith(suffix) for suffix in NIFTI_SUFFIXES):
@@ -238,18 +259,23 @@ def _find_seg_path(dataset_path: Path, image_stem: str) -> Path | None:
     return None
 
 
-def _collect_nifti_entries(dataset_path: Path) -> list[dict[str, Any]]:
+def _collect_nifti_entries(
+    dataset_path: Path,
+    patient_filter: str | None = None,
+) -> list[dict[str, Any]]:
     nifti_dir = dataset_path / "nifti"
     if not nifti_dir.is_dir():
         return []
 
     manifest_index = _load_manifest_index(dataset_path)
     entries: list[dict[str, Any]] = []
-    for image_path in _nifti_files(nifti_dir):
+    for image_path in _nifti_files(nifti_dir, patient_filter=patient_filter):
         filename = image_path.name
         image_stem = _strip_nifti_suffix(filename)
         row = manifest_index.get(filename, {})
         patient_id = (row.get("case_id") or "").strip() or _extract_patient_id(image_stem)
+        if patient_filter and patient_id != patient_filter:
+            continue
         source_patient_id = (row.get("patient_id") or "").strip() or None
         group = (row.get("group") or "").strip() or None
         phase = _normalize_phase(row.get("phase"))
@@ -279,15 +305,26 @@ def _candidate_voi_mask_roots(dataset_path: Path) -> list[Path]:
     return [path for path in (voi_dir / "mask", voi_dir / "segmentation") if path.is_dir()]
 
 
-def _collect_voi_entries(dataset_path: Path) -> list[dict[str, Any]]:
+def _collect_voi_entries(
+    dataset_path: Path,
+    patient_filter: str | None = None,
+) -> list[dict[str, Any]]:
     image_root = dataset_path / "voi" / "images"
     if not image_root.is_dir():
         return []
 
     mask_roots = _candidate_voi_mask_roots(dataset_path)
     entries: list[dict[str, Any]] = []
+    if patient_filter:
+        image_paths: list[Path] = []
+        for group_dir in sorted(path for path in image_root.iterdir() if path.is_dir()):
+            patient_dir = group_dir / patient_filter
+            if patient_dir.is_dir():
+                image_paths.extend(sorted(patient_dir.rglob("*.npy")))
+    else:
+        image_paths = sorted(image_root.rglob("*.npy"))
 
-    for image_path in sorted(image_root.rglob("*.npy")):
+    for image_path in image_paths:
         relative = image_path.relative_to(image_root)
         if len(relative.parts) < 3:
             continue
@@ -318,3 +355,9 @@ def _collect_voi_entries(dataset_path: Path) -> list[dict[str, Any]]:
         )
 
     return entries
+
+
+def _collect_series_entries(dataset_path: Path, patient_filter: str | None = None) -> list[dict[str, Any]]:
+    nifti_entries = _collect_nifti_entries(dataset_path, patient_filter=patient_filter)
+    voi_entries = _collect_voi_entries(dataset_path, patient_filter=patient_filter)
+    return sorted(nifti_entries + voi_entries, key=_series_sort_key)

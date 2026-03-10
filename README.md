@@ -50,6 +50,25 @@ pip install -r requirements.txt
 - Main configuration lives in `config/` (e.g., `config/config.yaml`, `config/planner.yaml`).
 - Project code lives under `src/`.
 
+## Radiomics CLI (A vs B)
+
+The radiomics analysis pipeline now includes a dedicated CLI package under `src/radio/`.
+It supports:
+
+- VOI indexing (`.npy` image/mask pairs)
+- Optional manifest metadata merge
+- PyRadiomics extraction
+- Patient-centered cohort building
+- Descriptive and A vs B group comparisons by phase (`nc`, `art`, `ven`)
+
+Typical usage:
+
+```bash
+python -m radio.cli run-all --config config/study_radiomics.yaml
+python -m radio.cli extract-radiomics --config config/study_radiomics.yaml
+python -m radio.cli compare-groups --config config/study_radiomics.yaml --phase art
+```
+
 If you are new to the repo, start with the docs index and follow the pipeline in order.
 
 ## Repository Layout

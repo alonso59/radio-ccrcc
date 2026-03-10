@@ -78,10 +78,11 @@ class TensorBoardLogger:
         x_hat: torch.Tensor, 
         step: int, 
         tag: str = "val",
-        norm_stats: Optional[dict] = None
+        norm_stats: Optional[dict] = None,
+        mask: Optional[torch.Tensor] = None
     ) -> None:
         """
-        Log volume reconstruction comparison.
+        Log volume reconstruction comparison with optional tumor boundary overlay.
         
         Args:
             x: Input volume
@@ -89,8 +90,9 @@ class TensorBoardLogger:
             step: Current training step/epoch
             tag: Tag prefix for the figure
             norm_stats: Normalization statistics for HU space visualization
+            mask: Optional segmentation mask for tumor boundary overlay
         """
-        fig = viz_helpers.create_reconstruction_figure(x, x_hat, norm_stats=norm_stats)
+        fig = viz_helpers.create_reconstruction_figure(x, x_hat, norm_stats=norm_stats, mask=mask)
         self.writer.add_figure(f"{tag}/AxialGrid", fig, global_step=step, close=True)
     
     # ==================== Classification Metrics =======================

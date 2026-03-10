@@ -5,7 +5,7 @@ The planner coordinates dataset preparation steps without touching source data. 
 ## What it does
 
 - **Preprocess**: VOI extraction into the standardized output folder
-- **Fingerprint**: Recompute dataset statistics from saved VOI outputs
+- **Fingerprint**: Recompute dataset statistics from saved VOI outputs (BBOX region, clamped HU range)
 - **Splits**: Generate train/val/test splits from the output folder
 - **Validate**: Check output folder structure is ready for downstream CNN workflows (TODO)
 

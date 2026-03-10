@@ -1,0 +1,35 @@
+dataset:
+  dataset_id: 720
+  voi_root: data/dataset/Dataset${dataset.dataset_id}/voi
+  mask_label_value: 2
+  # null (no phase filter), single phase (nc|art|ven|delay), or all
+  contrast_phase: all
+  # optional metadata enrichment only
+  # manifest_csv: data/dataset/Dataset320/tcga_kirc_nii/manifest.csv
+
+output:
+  root: outputs/radiomics/Dataset${dataset.dataset_id}
+
+pyradiomics:
+  config: config/radiomics/pyradiomics.yaml
+
+analysis:
+  exclude_columns:
+    - sample_id
+    - patient_id
+    - case_id
+    - side
+    - image_path
+    - mask_path
+    - class_raw
+    - group_label
+    - dominant_label
+    - contains_d
+    - contrast_phase
+  max_missing: 0.2
+  merge_groups:
+    C: A
+    AB: A
+    AC: A
+    BC: B
+  test_groups: [A, B]

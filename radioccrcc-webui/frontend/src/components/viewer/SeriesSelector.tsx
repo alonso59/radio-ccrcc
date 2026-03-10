@@ -22,12 +22,16 @@ interface SeriesSelectorProps {
   datasetId: string
   patientId: string
   onSeriesChange?: (series: SeriesInfo | null) => void
+  preferredSeriesId?: string | null
+  reloadKey?: number
 }
 
 function SeriesSelector({
   datasetId,
   patientId,
   onSeriesChange,
+  preferredSeriesId = null,
+  reloadKey = 0,
 }: SeriesSelectorProps) {
   const [requestState, setRequestState] = useState<{
     scope: string | null
@@ -39,7 +43,7 @@ function SeriesSelector({
     error: null,
   })
   const [selectedSeriesId, setSelectedSeriesId] = useState('')
-  const scope = `${datasetId}:${patientId}`
+  const scope = `${datasetId}:${patientId}:${reloadKey}`
   const loading = requestState.scope !== scope
   const seriesList = requestState.scope === scope ? requestState.seriesList : []
   const error = requestState.scope === scope ? requestState.error : null
@@ -60,7 +64,11 @@ function SeriesSelector({
           error: null,
         })
 
-        const defaultSeries = series[0] ?? null
+        const preferredSeries =
+          preferredSeriesId !== null
+            ? (series.find((entry) => entry.series_id === preferredSeriesId) ?? null)
+            : null
+        const defaultSeries = preferredSeries ?? series[0] ?? null
         setSelectedSeriesId(defaultSeries?.series_id ?? '')
         onSeriesChange?.(defaultSeries)
       })
@@ -81,7 +89,7 @@ function SeriesSelector({
     return () => {
       active = false
     }
-  }, [datasetId, onSeriesChange, patientId, scope])
+  }, [datasetId, onSeriesChange, patientId, preferredSeriesId, reloadKey, scope])
 
   const selectedSeries =
     seriesList.find((series) => series.series_id === selectedSeriesId) ?? null

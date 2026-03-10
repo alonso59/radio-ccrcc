@@ -10,10 +10,12 @@ import {
   Grid,
   Paper,
   Stack,
+  Button,
   Typography,
 } from '@mui/material'
 import { useNavigate } from 'react-router-dom'
 
+import { useSettings } from '../hooks/useSettings'
 import {
   apiClient,
   type DatasetSummary,
@@ -42,6 +44,7 @@ function DataBadge({
 
 function DatasetSelectorPage() {
   const navigate = useNavigate()
+  const settingsState = useSettings()
   const [datasets, setDatasets] = useState<DatasetSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -168,10 +171,11 @@ function DatasetSelectorPage() {
                             overflow: 'hidden',
                             WebkitLineClamp: 2,
                             WebkitBoxOrient: 'vertical',
-                            wordBreak: 'break-all',
                           }}
                         >
-                          {dataset.path}
+                          {dataset.has_manifest
+                            ? 'Manifest detected for structured metadata import.'
+                            : 'No manifest found; patient and series discovery is filename-driven.'}
                         </Typography>
                       </Stack>
 
@@ -189,6 +193,23 @@ function DatasetSelectorPage() {
                             variant={dataset.has_manifest ? 'filled' : 'outlined'}
                           />
                         </Stack>
+                        {!settingsState.loading &&
+                        settingsState.allSettings[dataset.dataset_id]?.last_patient ? (
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            onClick={(event) => {
+                              event.preventDefault()
+                              event.stopPropagation()
+                              navigate(
+                                `/datasets/${dataset.dataset_id}/patients/${settingsState.allSettings[dataset.dataset_id]?.last_patient}/viewer`,
+                              )
+                            }}
+                          >
+                            Resume{' '}
+                            {settingsState.allSettings[dataset.dataset_id]?.last_patient}
+                          </Button>
+                        ) : null}
                       </Stack>
                     </CardContent>
                   </CardActionArea>

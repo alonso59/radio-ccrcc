@@ -173,7 +173,7 @@ class TestLoaderFactory:
         Create test loader using dataset config to construct paths.
         
         Args:
-            data_cfg: Dataset configuration with dataset_id and dataset_type
+            data_cfg: Dataset configuration with dataset_id
             normalization_stats: Tuple of (mean, std, median, p25, p75)
             batch_size: Batch size for test loader
             num_workers: Number of workers
@@ -185,13 +185,12 @@ class TestLoaderFactory:
         
         # Construct splits path from config
         dataset_id = data_cfg.dataset_id
-        dataset_type = data_cfg.get('dataset_type', 'images')
         base_path = data_cfg.get('base_path', 'data/dataset')
         
-        splits_filename = f"splits_{dataset_type}.json"
+        splits_filename = f"splits_final.json"
         splits_path = os.path.join(base_path, dataset_id, 'voi', splits_filename)
         
-        logger.info(f"[TEST LOADER] Using dataset {dataset_id}, type {dataset_type}")
+        logger.info(f"[TEST LOADER] Using dataset {dataset_id}")
         
         return TestLoaderFactory.create_test_loader_with_stats(
             splits_path=splits_path,

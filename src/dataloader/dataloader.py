@@ -1,35 +1,22 @@
-"""
-Optimized DataLoader factory for CT datasets using TorchIO.
-Centralizes loader creation, robust error handling, and logging.
-"""
-
 import json
 import logging
-import torch
-import numpy as np
-import nibabel as nib
-import torchio as tio
-from typing import List, Tuple
-from omegaconf import DictConfig
-from src.dataloader.augmentations import train_augmentations, val_augmentations
 import os
+
+import numpy as np
+import torch
+import torchio as tio
+from omegaconf import DictConfig
 from torch.utils.data import DataLoader
-from tqdm import tqdm
+from typing import List, Tuple
 
 from hydra.utils import to_absolute_path
+from .augmentations import train_augmentations, val_augmentations
+from .sampler import AdaptiveTumorSamplerWrapper, AdaptiveSamplerConfig
 
 logger = logging.getLogger(__name__)
 
 def extract_iterative_statistics(fingerprint_path: str) -> Tuple[float, float, float, float, float]:
-    """
-    Load dataset statistics from fingerprint JSON file.
-    
-    Args:
-        fingerprint_path: Path to dataset_fingerprint_images.json or dataset_fingerprint_segmentation.json
-        
-    Returns:
-        Tuple of (mean, std, median, p25, p75)
-    """
+    """Load dataset statistics from fingerprint JSON file."""
     logger.info(f"[DATALOADER] Loading dataset statistics from: {fingerprint_path}")
     
     if not os.path.exists(fingerprint_path):
@@ -39,184 +26,139 @@ def extract_iterative_statistics(fingerprint_path: str) -> Tuple[float, float, f
         stats = json.load(f)
     
     def _pick_stats_dict(payload: dict) -> dict:
-        """Return the dict that actually contains the intensity stats."""
-        # Most robust: nnUNet-style (or similar) per-channel properties
         per_channel = payload.get("foreground_intensity_properties_per_channel")
         if isinstance(per_channel, dict) and per_channel:
-            # Common key is "0" but accept any single/first channel.
-            if "0" in per_channel and isinstance(per_channel["0"], dict):
-                return per_channel["0"]
-            for _, v in per_channel.items():
-                if isinstance(v, dict):
-                    return v
-
-        # Fallbacks if project writes a flatter schema
-        for k in ("dataset_statistics", "intensity_properties", "foreground_intensity_properties"):
-            v = payload.get(k)
-            if isinstance(v, dict) and v:
-                return v
-
+            return per_channel.get("0", next(iter(per_channel.values())))
+        # Handle {"foreground_intensity": {"channel_0": {...stats...}}}
+        foreground_intensity = payload.get("foreground_intensity")
+        if isinstance(foreground_intensity, dict) and foreground_intensity:
+            first_channel = foreground_intensity.get("channel_0", next(iter(foreground_intensity.values())))
+            if isinstance(first_channel, dict):
+                return first_channel
+        for key in ("dataset_statistics", "intensity_properties", "foreground_intensity_properties"):
+            if isinstance(payload.get(key), dict):
+                return payload[key]
         return payload
-
+    
     stats_dict = _pick_stats_dict(stats)
-
-    # Extract required statistics (support a few common key variants)
+    
     mean = stats_dict.get("mean")
     std = stats_dict.get("std")
     median = stats_dict.get("median")
-    p25 = stats_dict.get("percentile_25_0", stats_dict.get("percentile_25", stats_dict.get("p25")))
-    p75 = stats_dict.get("percentile_75_0", stats_dict.get("percentile_75", stats_dict.get("p75")))
+    p25 = stats_dict.get("percentile_25_0") or stats_dict.get("percentile_25") or stats_dict.get("p25")
+    p75 = stats_dict.get("percentile_75_0") or stats_dict.get("percentile_75") or stats_dict.get("p75")
     
-    # Validate all required fields are present
     if any(v is None for v in [mean, std, median, p25, p75]):
-        available = sorted(list(stats_dict.keys())) if isinstance(stats_dict, dict) else []
         raise ValueError(
-            f"[DATALOADER] Missing required statistics in fingerprint file: {fingerprint_path}. "
-            f"Looked in keys: {available}"
+            f"[DATALOADER] Missing statistics in {fingerprint_path}. "
+            f"Available keys: {sorted(stats_dict.keys())}"
         )
-
-    assert mean is not None
-    assert std is not None
-    assert median is not None
-    assert p25 is not None
-    assert p75 is not None
     
-    mean_f = float(mean)
-    std_f = float(std)
-    median_f = float(median)
-    p25_f = float(p25)
-    p75_f = float(p75)
-
-    logger.info(
-        f"[DATALOADER] Loaded statistics - mean: {mean_f:.2f}, std: {std_f:.2f}, median: {median_f:.2f}"
-    )
-    return mean_f, std_f, median_f, p25_f, p75_f
+    logger.info(f"[DATALOADER] Stats - mean: {mean:.2f}, std: {std:.2f}, median: {median:.2f}")
+    return mean, std, median, p25, p75  # type: ignore
     
     
-def extract_class_label(file_path: str) -> str:
-    """
-    Extract and normalize class label from file path.
-    
-    Args:
-        file_path: Path to the medical imaging file
-        
-    Returns:
-        Normalized class label string
-    """
-    
-    class_label = os.path.basename(os.path.dirname(os.path.dirname(file_path)))
-    # Normalize A, C, and A+C labels to 'A'
-    # 0
+def extract_class_label(file_path):
+    """Extract and normalize class label from file path."""
+    # based on dir FROM path data/dataset/voi/dataset_id/images/<group_id>/<subject_id>/<c_phase>/**.npy
+    class_label = os.path.basename(os.path.dirname(os.path.dirname(os.path.dirname(file_path))))
+    assert class_label in {'A', 'B', 'C', 'D', 'AB', 'AC', 'AD', 'BC', 'BD', 'NG'}, \
+        f"Unexpected class label '{class_label}' extracted from {file_path}"
     if class_label in {'A', 'C', 'AC', 'AB', 'AD'}:
         return 'A'
-    # 1
-    if class_label in {'B',  'BC', 'BD'}:
+    elif class_label in {'B', 'BC', 'BD'}:
         return 'B'
-    # 2
-    if class_label in {'D'}:
+    elif class_label == 'D':
         return 'D'
-    # 3    
-    if not class_label in {'A', 'B', 'C', 'D', 'AC', 'AB', 'AD', 'BC', 'BD'}:
+    else:
         return 'NG'
-    return class_label
-
-
-def map_label_to_category(class_label: str) -> int:
+def extract_contrast_phase(file_path):
     """
-    Map class label to categorical integer.
+    Extract contrast type based on phase directory in file path.
+        FROM path data/dataset/voi/dataset_id/images/<group_id>/<subject_id>/<c_phase>/**.npy
+        <c_phase>: nc, art, ven, delay
+    """
+    phase_mapping = {
+        'NC': 0,
+        'ART': 1,
+        'VEN': 2,
+    }
+    # based on FROM path data/dataset/voi/dataset_id/images/<group_id>/<subject_id>/<c_phase>/**.npy
+    phase_dir = os.path.basename(os.path.dirname(file_path))
+    contrast_type = phase_mapping.get(phase_dir, None)
     
-    Args:
-        class_label: String class label
-        
-    Returns:
-        Integer category mapping, -1 if unknown
-    """
+    # Exclude if phase not found (only group or subject in path)
+    if contrast_type is None:
+        logger.warning(f"[DATALOADER] Phase not found in {file_path}. Path: {phase_dir}")
+    
+    return contrast_type
+    
+def map_label_to_category(class_label: str):
+    """Map class label to categorical integer."""
     mapping = {
         'A': 0,
         'B': 1,
-        'C': 0,
         'D': 2,
-        'A+C': 0,
-        'A+B': 1,
-        'A+D': 0,
-        'B+C': 1,
-        'B+D': 1
+        'NG': 3
     }
     return mapping.get(class_label, -1)
 
 def create_ct_subjects(file_paths: List[str]) -> List[tio.Subject]:
-    """
-    Create TorchIO Subjects for CT images from NIfTI files.
-    Args:
-        file_paths: List of NIfTI file paths
-    Returns:
-        List of TorchIO Subjects
-    Raises:
-        ValueError: If tensor dimensions are invalid or file not found
-    """
+    """Create TorchIO Subjects for CT images and multilabel masks."""
+    
     subjects = []
     for file_path in file_paths:
         try:
-            data = np.load(file_path) # type:ignore
-            # from file_path with structure as example: /home/alonso/Documents/ccRCC/data/tcga_kirc_voi_f/img loag the mas of /home/alonso/Documents/ccRCC/data/tcga_kirc_voi_f/msk but must be the same file
-            # data_mask = np.load(file_path.replace('img', 'msk')) # type:ignore
-            # conver to binary ensure 0 or 1
-            # data_mask = (data_mask > 0).astype(np.uint8)
-            # data = nii.get_fdata() # type:ignore
-            # mask = np.load(file_path.replace('.npy', '_mask.npy')) # type:ignore
+            data = np.load(file_path)
+            mask_path = file_path.replace('images', 'mask')
+            multilabel_mask = np.load(mask_path)
+            
             tensor_data = torch.tensor(data, dtype=torch.float32)
-            # tensor_mask = torch.tensor(data_mask, dtype=torch.uint8)
-
-            # assert tensor_data.shape == tensor_mask.shape, f"CT and mask shape mismatch for {file_path}"
-            # Ensure tensor is 4D (C, H, W, D)
+            tensor_mask = torch.tensor(multilabel_mask, dtype=torch.uint8)
+            
             if tensor_data.ndim == 3:
                 tensor_data = tensor_data.unsqueeze(0)
-                # tensor_mask = tensor_mask.unsqueeze(0)
-            elif tensor_data.ndim != 4:
-                raise ValueError(f"[DATALOADER] Expected 3D or 4D tensor, got {tensor_data.shape} from {file_path}")
+            if tensor_mask.ndim == 3:
+                tensor_mask = tensor_mask.unsqueeze(0)
+            
             image = tio.ScalarImage(tensor=tensor_data, affine=np.eye(4))
-            # Ensure mask is treated as label data so intensity transforms are not applied
-            # tensor_mask = tensor_mask.to(torch.uint8)
-            # mask = tio.LabelMap(tensor=tensor_mask, affine=np.eye(4))
+            mask = tio.LabelMap(tensor=tensor_mask, affine=np.eye(4))
+            assert image.shape == mask.shape, \
+                f"CT and mask shape mismatch: {image.shape} vs {mask.shape}"
+            
             class_label = extract_class_label(file_path)
-            subject = tio.Subject(ct=image, label=str(class_label))  # type: ignore
+            phase_label = extract_contrast_phase(file_path)
+            
+            subject = tio.Subject(ct=image, mask=mask, label=class_label, phase=phase_label)  # type: ignore
             subjects.append(subject)
+            
         except Exception as e:
             logger.error(f"[DATALOADER] Error loading {file_path}: {e}")
             raise
+    
+    logger.info(f"[DATALOADER] Created {len(subjects)} subjects with CT + multilabel mask pairs")
     return subjects
+
 
 class DataLoaderFactory:
     @staticmethod
     def create_loaders(data_cfg: DictConfig):
-        """
-        Create train/val loaders for CT data using config.
-        data_cfg must have:
-            - dataset_id: Dataset ID (e.g., Dataset320)
-            - dataset_type: images or segmentation
-            - base_path: Base path to dataset folder (default: data/dataset)
-            - fold: fold name or number
-            - batch_size, num_workers
-        """
+        """Create train/val loaders for CT data using config."""
         logger.info("[DATALOADER] Creating CT data loaders")
         
-        # Construct paths from dataset_id and dataset_type
         dataset_id = data_cfg.dataset_id
-        dataset_type = data_cfg.get('dataset_type', 'images')
         base_path = data_cfg.get('base_path', 'data/dataset')
 
-        # Hydra changes the process working directory to the run folder.
-        # Resolve relative dataset paths against the original project cwd.
         base_path = base_path if os.path.isabs(base_path) else to_absolute_path(base_path)
         
-        splits_filename = f"splits_{dataset_type}.json"
+        splits_filename = f"splits.json"
         splits_path = os.path.join(base_path, dataset_id, 'voi', splits_filename)
         
-        logger.info(f"[DATALOADER] Dataset: {dataset_id}, Type: {dataset_type}")
+        logger.info(f"[DATALOADER] Dataset: {dataset_id}")
         logger.info(f"[DATALOADER] Loading splits from: {splits_path}")
         
         fold = data_cfg.fold
-        fold_name = "ct_folds"
+        fold_name = "folds"
         if not os.path.exists(splits_path):
             raise FileNotFoundError(
                 f"[DATALOADER] Splits file not found: {splits_path} (cwd={os.getcwd()})"
@@ -235,8 +177,8 @@ class DataLoaderFactory:
             if fold_data is None:
                 raise ValueError(f"Fold {fold} not found in {fold_name}")
             
-            train_files = fold_data['train_ct_files']
-            val_files = fold_data['val_ct_files']
+            train_files = fold_data['train_files']
+            val_files = fold_data['val_files']
         except KeyError as e:
             raise ValueError(f"[DATALOADER] Invalid fold structure in splits file. Missing key: {e}")
         
@@ -246,7 +188,7 @@ class DataLoaderFactory:
         
         # Construct fingerprint file path
         splits_dir = os.path.dirname(splits_path)
-        fingerprint_filename = f"dataset_fingerprint_{dataset_type}.json"
+        fingerprint_filename = f"dataset_fingerprint.json"
         fingerprint_path = os.path.join(splits_dir, fingerprint_filename)
         
         # Load dataset statistics from fingerprint file
@@ -258,23 +200,70 @@ class DataLoaderFactory:
         train_dataset = tio.SubjectsDataset(train_subjects, transform=train_transform)
         val_dataset = tio.SubjectsDataset(val_subjects, transform=val_transform)
         
-        train_loader = DataLoader(
+        patch_size = (96, 96, 64)
+        patch_overlap = (48, 48, 32)
+        samples_per_volume = data_cfg.get('samples_per_volume', 4)  
+        max_queue_length = data_cfg.get('max_queue_length', 200) 
+        num_workers = data_cfg.get('num_workers', 8)
+        sampler_config = AdaptiveSamplerConfig(
+            min_tumor_voxels=data_cfg.get('min_tumor_voxels', 20),      # Quality threshold
+            voxels_per_patch=data_cfg.get('voxels_per_patch', 300),     # Adaptive scaling
+            max_patches_cap=data_cfg.get('max_patches_cap', 8),        # Upper limit
+            tumor_label=2,                                              # Tumor class in mask
+        )
+        
+        logger.info(
+            "[DATALOADER] Sampler: patch=%s overlap=%s min_voxels=%s voxels_per_patch=%s max_cap=%s samples=%s queue=%s workers=%s",
+            patch_size,
+            patch_overlap,
+            sampler_config.min_tumor_voxels,
+            sampler_config.voxels_per_patch,
+            sampler_config.max_patches_cap,
+            samples_per_volume,
+            max_queue_length,
+            num_workers,
+        )
+        
+        tumor_sampler = AdaptiveTumorSamplerWrapper(
+            patch_size=patch_size,
+            patch_overlap=patch_overlap,
+            mask_name='mask',
+            config=sampler_config,
+        )
+        train_queue = tio.Queue(
             train_dataset,
+            max_length=max_queue_length,
+            samples_per_volume=samples_per_volume,
+            sampler=tumor_sampler,
+            num_workers=num_workers,
+            shuffle_subjects=True,
+            shuffle_patches=True,
+        )
+        
+        val_queue = tio.Queue(
+            val_dataset,
+            max_length=max_queue_length // 2,
+            samples_per_volume=samples_per_volume,
+            sampler=tumor_sampler,
+            num_workers=num_workers,
+            shuffle_subjects=False,
+            shuffle_patches=False,
+        )
+        
+        train_loader = DataLoader(
+            train_queue,
             batch_size=data_cfg.batch_size,
-            shuffle=True,
-            num_workers=data_cfg.num_workers,
-            pin_memory=True,
+            num_workers=0,  # Queue handles workers
+            pin_memory=False,  # TorchIO images are not pin_memory compatible
         )
         
         val_loader = DataLoader(
-            val_dataset,
+            val_queue,
             batch_size=data_cfg.batch_size,
-            shuffle=False,
-            num_workers=data_cfg.num_workers,
-            pin_memory=True,
+            num_workers=0,
+            pin_memory=False,  # TorchIO images are not pin_memory compatible
         )
         
-        # Package normalization statistics for metrics computation
         normalization_stats = {
             'mean': data_stats[0],
             'std': data_stats[1],

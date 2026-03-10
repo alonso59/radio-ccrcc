@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from pydantic import BaseModel, Field
 
 
 class DatasetSummary(BaseModel):
     dataset_id: str
-    path: str
     patient_count: int = 0
     has_nifti: bool = False
     has_seg: bool = False
@@ -31,13 +32,26 @@ class SeriesInfo(BaseModel):
     phase: str | None = None
     laterality: str | None = None
     filename: str
-    image_path: str
-    mask_path: str | None = None
     has_seg: bool = False
+
+
+@dataclass(frozen=True)
+class SeriesSource:
+    series_id: str
+    patient_id: str
+    type: str
+    group: str | None
+    phase: str | None
+    laterality: str | None
+    filename: str
+    image_path: str
+    mask_path: str | None
+    has_seg: bool
 
 
 class VolumeInfo(BaseModel):
     series_id: str
+    load_handle: str
     shape: list[int] = Field(default_factory=list)
     spacing: list[float] = Field(default_factory=list)
     has_mask: bool = False

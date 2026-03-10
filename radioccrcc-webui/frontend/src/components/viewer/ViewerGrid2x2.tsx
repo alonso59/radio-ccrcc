@@ -1,5 +1,5 @@
 import { Box, Stack, Typography } from '@mui/material'
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 
 import ExpandablePanel from './ExpandablePanel'
 
@@ -47,18 +47,36 @@ interface ViewerGrid2x2Props {
 
 function ViewerGrid2x2({ panels = {} }: ViewerGrid2x2Props) {
   const [expandedPanel, setExpandedPanel] = useState<PanelId | null>(null)
+  const hasExpandedPanel = expandedPanel !== null
+
+  useEffect(() => {
+    if (!hasExpandedPanel) {
+      // If a panel expansion briefly introduced horizontal overflow, reset to the left edge.
+      window.scrollTo({ left: 0, top: window.scrollY, behavior: 'auto' })
+    }
+  }, [hasExpandedPanel])
 
   return (
     <Box
       sx={{
         display: 'grid',
-        gridTemplateColumns: { xs: '1fr', lg: '1fr 1fr' },
-        gridTemplateRows: { xs: 'repeat(4, minmax(240px, 1fr))', lg: 'repeat(2, minmax(280px, 1fr))' },
-        gap: '2px',
-        p: '2px',
-        borderRadius: 4,
+        width: '100%',
+        gridTemplateColumns: hasExpandedPanel
+          ? 'minmax(0, 1fr)'
+          : { xs: 'minmax(0, 1fr)', xl: 'minmax(0, 1fr) minmax(0, 1fr)' },
+        gridTemplateRows: hasExpandedPanel
+          ? 'minmax(320px, min(82vh, 980px))'
+          : {
+              xs: 'repeat(4, minmax(260px, auto))',
+              sm: 'repeat(4, minmax(300px, auto))',
+              xl: 'repeat(2, auto)',
+            },
+        gap: '1px',
+        p: '1px',
+        borderRadius: 1,
         backgroundColor: 'divider',
-        minHeight: { xs: 980, lg: 760 },
+        minHeight: hasExpandedPanel ? 320 : { xs: 'auto', xl: 0 },
+        minWidth: 0,
       }}
     >
       {PANEL_DEFS.map((panel) => {
@@ -69,7 +87,10 @@ function ViewerGrid2x2({ panels = {} }: ViewerGrid2x2Props) {
           <Box
             key={panel.id}
             sx={{
+              minWidth: 0,
               minHeight: 0,
+              height: hasExpandedPanel ? '100%' : 'auto',
+              aspectRatio: hasExpandedPanel ? 'auto' : { xs: 'auto', xl: '1 / 1' },
               display: hidden ? 'none' : 'block',
               ...(expandedPanel
                 ? {

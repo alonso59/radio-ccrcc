@@ -46,8 +46,8 @@ python src/generate_splits.py data/dataset/tcga_kirc_tumor \
 
 The script writes JSON files into `DATA_FOLDER/`:
 
-- `splits_images.json` (always)
-- `splits_segmentation.json` (only if `segmentation/` exists)
+
+- `splits_final.json` (always, based on images only)
 
 Each JSON contains:
 - `params`: `n_folds`, `test_ratio`, `random_seed`
@@ -57,5 +57,4 @@ Each JSON contains:
 
 ## When to Use Which Split File
 
-- Use `splits_images.json` when your pipeline reads from `images/`.
-- Use `splits_segmentation.json` when you need matching file lists from `segmentation/`.
+- Use `splits_final.json` for all pipeline operations (based on images/ VOIs only).

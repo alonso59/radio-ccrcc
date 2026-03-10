@@ -15,6 +15,7 @@ from tqdm import tqdm
 from pytorch_msssim import ssim
 import torch.nn.functional as F
 import logging
+from ..utils.imaging import window_ct_pair
 
 class BaseTrainer(ABC):
     """
@@ -38,7 +39,7 @@ class BaseTrainer(ABC):
         self.logger = logger
         self.callbacks = callbacks or []
         self.max_epochs = int(max_epochs if max_epochs is not None else cfg.trainer.max_epochs)
-        self.norm_stats = normalization_stats or {}  # Store normalization statistics
+        self.norm_stats = normalization_stats or {}
         self.global_step = 0
         self.best_val_metric = float('inf')
         self.metrics = {
@@ -67,7 +68,7 @@ class BaseTrainer(ABC):
         pass
     
     @abstractmethod
-    def train_step(self, batch: Any) -> Dict[str, float]:
+    def train_step(self, epoch, batch: Any) -> Dict[str, float]:
         """
         Execute one training step.
         
@@ -80,7 +81,7 @@ class BaseTrainer(ABC):
         pass
     
     @abstractmethod
-    def validation_step(self, batch: Any) -> Dict[str, float]:
+    def validation_step(self, epoch, batch: Any) -> Dict[str, float]:
         """
         Execute one validation step.
         
@@ -165,9 +166,9 @@ class BaseTrainer(ABC):
             ):
                 # Execute step
                 if train:
-                    step_metrics = self.train_step(batch)
+                    step_metrics = self.train_step(epoch, batch)
                 else:
-                    step_metrics = self.validation_step(batch)
+                    step_metrics = self.validation_step(epoch, batch)
                 
                 # Accumulate metrics
                 for key, value in step_metrics.items():
@@ -282,56 +283,21 @@ class BaseTrainer(ABC):
             self.best_val_metric = current_val
             logging.info(f"✓ New best {monitor_metric}: {self.best_val_metric:.4f}")
 
-    def _denormalize_to_hu(self, x_iqr: torch.Tensor) -> torch.Tensor:
-        """
-        Convert IQR-normalized data back to HU space.
-        
-        Args:
-            x_iqr: IQR-normalized tensor (range ~[-3, 3])
-        
-        Returns:
-            Tensor in HU space
-        """
-        if not self.norm_stats:
-            return x_iqr  # Fallback: no denormalization if stats unavailable
-        
-        median = self.norm_stats['median']
-        iqr = self.norm_stats['iqr']
-        return x_iqr * iqr + median
-
     def _psnr_torch(self, img1: torch.Tensor, img2: torch.Tensor) -> torch.Tensor:
         """
-        Compute PSNR in HU space (or IQR space as fallback).
-        
-        Medical imaging standard: compute in HU for clinical interpretability
-        and literature comparability.
-        
-        Args:
-            img1: First image tensor
-            img2: Second image tensor
-        
-        Returns:
-            PSNR value in dB
+        Compute PSNR on CT-windowed volumes.
+
+        This requires normalization statistics with `median` and `iqr` so both
+        images are compared in the same HU display range used by visualization.
         """
-        from src.dataloader.augmentations import P_LOW, P_HIGH
-        
-        # if self.norm_stats:
-        #     # Convert to HU space for clinical relevance
-        #     img1_hu = self._denormalize_to_hu(img1).clamp(P_LOW, P_HIGH)
-        #     img2_hu = self._denormalize_to_hu(img2).clamp(P_LOW, P_HIGH)
-        #     data_range = float(P_HIGH - P_LOW)  # 500 HU
-        #     mse = F.mse_loss(img1_hu, img2_hu)
-        # else:
-        # Fallback: IQR-normalized space
-        clip_val = 3.0
-        img1 = img1.clamp(-clip_val, clip_val)
-        img2 = img2.clamp(-clip_val, clip_val)
-        data_range = 2 * clip_val  # 6.0
-        mse = F.mse_loss(img1, img2)
-        
+        img1_scaled, img2_scaled = window_ct_pair(img1, img2, self.norm_stats)
+
+        data_range = 1.0
+        mse = F.mse_loss(img1_scaled, img2_scaled)
+
         if mse == 0:
             return torch.tensor(float('inf'))
-        
+
         return 10 * torch.log10(data_range**2 / mse)
     
     def _ssim_torch(
@@ -341,64 +307,25 @@ class BaseTrainer(ABC):
         reduction: str = "mean"
     ) -> torch.Tensor:
         """
-        Compute SSIM in HU space (or IQR space as fallback).
-        
-        Medical imaging standard: compute in HU for clinical interpretability
-        and literature comparability.
-        
-        Args:
-            x: Original image tensor
-            x_hat: Reconstructed image tensor
-            win_size: Window size for SSIM computation
-            win_sigma: Gaussian window standard deviation
-            reduction: Reduction method ('mean' or 'sum')
-        
-        Returns:
-            SSIM value in range [0, 1]
+        Compute SSIM on CT-windowed volumes.
+
+        This requires normalization statistics with `median` and `iqr` so both
+        images are compared in the same HU display range used by visualization.
         """
-        from src.dataloader.augmentations import P_LOW, P_HIGH
-        
-        # if self.norm_stats:
-        #     # Convert to HU space
-        #     x_hu = self._denormalize_to_hu(x).clamp(P_LOW, P_HIGH)
-        #     x_hat_hu = self._denormalize_to_hu(x_hat).clamp(P_LOW, P_HIGH)
-            
-        #     # Normalize to [0, 1] for SSIM
-        #     data_range_hu = float(P_HIGH - P_LOW)
-        #     x_norm = (x_hu - P_LOW) / data_range_hu
-        #     x_hat_norm = (x_hat_hu - P_LOW) / data_range_hu
-        #     ssim_data_range = 1.0
-        # else:
-        # Fallback: IQR-normalized space
-        clip_val = 3.0
-        x_hat = x_hat.clamp(-clip_val, clip_val)
-        x = x.clamp(-clip_val, clip_val)
-        
-        # Map [-3, 3] to [0, 1]
-        x_norm = (x + clip_val) / (2 * clip_val)
-        x_hat_norm = (x_hat + clip_val) / (2 * clip_val)
-        ssim_data_range = 1.0
-        
-        size_avg = (reduction == "mean")
-        
+        x_scaled, x_hat_scaled = window_ct_pair(x, x_hat, self.norm_stats)
+
         return ssim(
-            x_norm, x_hat_norm,
-            data_range=ssim_data_range
+            x_scaled, x_hat_scaled,
+            data_range=1.0
         )
     
     def _compute_quality_metrics(self, x_recon: torch.Tensor, x: torch.Tensor) -> Dict[str, float]:
         """
         Compute quality metrics (PSNR, SSIM) for reconstruction.
         
-        Metrics are computed in HU space if normalization stats available,
-        otherwise falls back to IQR-normalized space.
-        
-        Args:
-            x_recon: Reconstructed images
-            x: Original images
-        
-        Returns:
-            Dictionary with metrics including PSNR_count for proper averaging
+        Metrics are computed on the same CT-windowed range used for
+        visualization. Missing normalization statistics will raise a clear
+        error through `window_ct_pair`.
         """
         metrics = {}
         

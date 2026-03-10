@@ -144,10 +144,9 @@ RANDOM_SEED: 42                     # reproducibility
 ├── images/{class}/{patient_id}/
 │   └── {case_name}_{side}.npy           # Full CT VOI (required for fingerprint-only)
 ├── dataset.json                         # Case manifest & source paths
-├── dataset_fingerprint_segmentation.json # Stats from mask>0 region
-├── dataset_fingerprint_images.json      # Stats from full VOI
+├── dataset_fingerprint.json             # Stats from BBOX region (clamped HU range)
 ├── sanity_check.json                    # Validation report
-└── splits_images.json                   # Train/val/test splits
+└── splits_final.json                    # Train/val/test splits (images only)
 ```
 
 ### Filename Format
@@ -194,20 +193,34 @@ Complete case registry with source paths:
 ```
 
 ### dataset_fingerprint.json
-Population-level statistics for normalization:
+Population-level statistics from BBOX region for normalization:
 ```json
 {
-  "spacing": {"median": [1.0, 1.0, 1.0], "mean": [...], "std": [...]},
-  "size": {"median": [128, 128, 128], ...},
-  "intensity_statistics": {
-    "mean": 45.2,
-    "median": 42.1,
-    "std": 28.5,
-    "percentiles": {"0.5": -180, "99.5": 290, ...}
+  "fingerprint_type": "bbox",
+  "foreground_intensity_properties_per_channel": {
+    "0": {
+      "mean": 45.2,
+      "median": 42.1,
+      "std": 28.5,
+      "percentile_25_0": 30.5,
+      "percentile_75_0": 58.3,
+      "iqr": 27.8
+    }
   },
-  "tumor_statistics": {
-    "num_voxels": {"median": 15234, "mean": 18456, ...},
-    "volume_mm3": {...}
+  "normalization": {
+    "method": "iqr",
+    "percentile_25": 30.5,
+    "percentile_75": 58.3,
+    "median": 42.1,
+    "iqr": 27.8
+  },
+  "voxel_collection_info": {
+    "method": "bbox_only",
+    "region": "BBOX (union of BBOX_LABELS)",
+    "hu_range": [-200, 300],
+    "total_voxels": 15234567,
+    "filtered_voxels": 14987234,
+    "filter_ratio": 0.984
   }
 }
 ```

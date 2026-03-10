@@ -1,12 +1,9 @@
 SHELL := /bin/bash
 
-UDOCKER_DIR := /home/alonso/Documents/radio-ccrcc/radioccrcc-webui/.udocker
-UDOCKER_PYTHON := /home/alonso/anaconda3/envs/ccrcc/bin/python
-UDOCKER_PYTHONPATH := /home/alonso/Documents/radio-ccrcc/radioccrcc-webui/udocker-1.3.17
-UDOCKER_MAIN := /home/alonso/Documents/radio-ccrcc/radioccrcc-webui/udocker-1.3.17/udocker/maincmd.py
-UDOCKER = PROOT_NO_SECCOMP=1 UDOCKER_DIR=$(UDOCKER_DIR) PYTHONPATH=$(UDOCKER_PYTHONPATH) $(UDOCKER_PYTHON) $(UDOCKER_MAIN)
+PROJECT_ROOT := /home/alonso/Documents/radio-ccrcc/radioccrcc-webui
+UDOCKER := /home/alonso/anaconda3/envs/ccrcc/bin/python $(PROJECT_ROOT)/udocker.py
 
-.PHONY: setup-node install-backend dev-backend dev-frontend
+.PHONY: setup-node install-backend dev-backend dev-frontend build-frontend compose-build compose-up compose-down compose-logs
 
 setup-node:
 	$(UDOCKER) pull node:20-slim
@@ -30,3 +27,21 @@ dev-frontend:
 		-p 5173:5173 \
 		radio-node \
 		bash -c "cd /app && npm install && npm run dev -- --host 0.0.0.0 --port 5173"
+
+build-frontend:
+	$(UDOCKER) run --hostenv \
+		-v /home/alonso/Documents/radio-ccrcc/radioccrcc-webui/frontend:/app \
+		radio-node \
+		bash -c "cd /app && npm install && npm run build"
+
+compose-build:
+	docker compose build
+
+compose-up:
+	docker compose up -d --build
+
+compose-down:
+	docker compose down
+
+compose-logs:
+	docker compose logs -f

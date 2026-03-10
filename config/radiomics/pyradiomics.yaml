@@ -1,0 +1,17 @@
+imageType:
+  Original: {}
+
+featureClass:
+  shape:     []       # enable all shape features
+  firstorder: []
+  glcm:      []
+  glrlm:     []
+  glszm:     []
+  gldm:      []
+  ngtdm:     []
+
+setting:
+  interpolator: 'sitkBSpline'
+  resegmentRange: [-150, 250]         # intensity range for kidney/tumor
+  binWidth: 25                        # fixed bin width for discretization:contentReference[oaicite:8]{index=8}
+  force2D: false

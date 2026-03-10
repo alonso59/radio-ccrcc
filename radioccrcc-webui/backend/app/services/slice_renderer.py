@@ -14,6 +14,11 @@ DEFAULT_LAYER_CONFIG: dict[int, dict[str, Any]] = {
     3: {"name": "Cyst", "color": "magenta", "alpha": 0.15, "linewidth": 2},
 }
 
+# Slices are upscaled so their longest side is at least this many pixels.
+# This makes VOI crops (which can be ~64 px) fill the viewport like full
+# NIfTI scans, giving a homogeneous look across series types.
+_MIN_DISPLAY_PX = 512
+
 
 def render_slice(
     volume: np.ndarray,
@@ -44,6 +49,24 @@ def render_slice(
             rgb[label_mask] = rgb[label_mask] * (1.0 - alpha) + color * alpha
 
     image = Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8), mode="RGB")
+
+    # ── Normalise output size ─────────────────────────────────────────────────
+    # Upscale small images (e.g. VOI crops) so they fill the viewport just like
+    # a full NIfTI scan would. Nearest-neighbour preserves crisp CT pixel edges.
+    # We upscale BEFORE drawing contours so the lines are crisp at final size.
+    w, h = image.size
+    longest = max(w, h)
+    if longest < _MIN_DISPLAY_PX:
+        scale = _MIN_DISPLAY_PX / longest
+        new_w = max(1, round(w * scale))
+        new_h = max(1, round(h * scale))
+        image = image.resize((new_w, new_h), Image.NEAREST)
+        if mask_slice is not None:
+            # Upscale mask with nearest-neighbour to keep label integrity
+            mask_pil = Image.fromarray(mask_slice.astype(np.uint8), mode="L")
+            mask_pil = mask_pil.resize((new_w, new_h), Image.NEAREST)
+            mask_slice = np.asarray(mask_pil)
+
     if mask_slice is not None:
         image = _draw_contours(image, mask_slice, layers, config)
 

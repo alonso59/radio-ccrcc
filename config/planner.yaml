@@ -1,106 +1,44 @@
-# -----------------------------------------------------------------------------
-# INPUT/OUTPUT PATHS
-# -----------------------------------------------------------------------------
+DATASET_ID: 820
+OUTPUT_BASE: "data/dataset"
 
+IMAGE_FOLDER: "data/dataset/Dataset820/nifti/"
+MASK_FOLDER: "data/dataset/Dataset820/seg/"
 
-# Dataset ID (nnUNet-like) - auto-derives OUTPUT_DIR if not set
-DATASET_ID: 420
-OUTPUT_BASE: "data/dataset"  # Base folder for datasets
-# OUTPUT_DIR: "data/dataset/tcga_kirc_tumor/"  # Deprecated - use DATASET_ID instead
-
-IMAGE_FOLDER: "data/dataset/Dataset420/ukb25_nii/"
-MASK_FOLDER: "data/dataset/Dataset420/ukb25_seg/"
-
-# Input format: 'auto', 'nifti', 'npy'
-INPUT_FORMAT: "auto"
-
-# File suffixes for matching image-mask pairs
 IMAGE_SUFFIX: "_0000.nii.gz"
 MASK_SUFFIX: ".nii.gz"
+CLASS_FILTER: null
 
-# Class filter: which subfolders to process
-# Options:
-#   null or [] - process all subfolders found
-#   ["NG"] - process only NG subfolder
-#   ["A", "B", "C"] - process multiple subfolders
-CLASS_FILTER: null  # null = all classes
+TARGET_SPACING: [1.0, 1.0, 1.0]  # target spacing in mm (x, y, z)
+# "anisotropic": keep X/Y median, sharpen Z when > Z_COARSE_THRESH to max(min(z,1.0), min(x,y))
+# "isotropic":   all axes set to global minimum median spacing
+SPACING_MODE: "isotropic"
+# Z-axis median threshold (mm) above which Z is sharpened (only when SPACING_MODE=anisotropic)
+Z_COARSE_THRESH: 2.0
+# Axis ordering for saved .npy files: "ZYX" (SimpleITK native, nnU-Net compatible)
+# or "XYZ" (transpose Z<->X for viewers that expect width-first arrays)
+SAVE_AXES_ORDER: "XYZ"
 
-# -----------------------------------------------------------------------------
-# OUTPUT OPTIONS
-# -----------------------------------------------------------------------------
-SAVE_MASK: true              # Save mask arrays (uint8)
-SAVE_SEGMENTATION: true      # Save masked CT images (float32)
-SAVE_IMAGES: true
-# -----------------------------------------------------------------------------
-# PROCESSING PARAMETERS
-# -----------------------------------------------------------------------------
-# Target voxel spacing in mm [x, y, z]
-TARGET_SPACING: [1.0, 1.0, 1.0]
+EXPANSION_MM: 5.0
+ANISO_RATIO_THRESH: 2.0
 
-# Expansion margin around kidney bounding box (mm)
-EXPANSION_MM: 1.0
 
-# Minimum VOI size in voxels [x, y, z]
-MIN_VOI_SIZE: [128, 128, 128]
+MIN_VOI_SIZE: [96, 96, 64]  # [96, 96, 64] to enforce minimum size
+ENFORCE_MIN_VOI: true  # Optional: explicitly enable/disable
 
-# Convert to RAS+ canonical orientation
-USE_RAS_ORIENTATION: true
-
-# Default spacing for .npy inputs (if no metadata available)
-DEFAULT_NPY_SPACING: [1.0, 1.0, 1.0]
-
-# -----------------------------------------------------------------------------
-# LABEL CONFIGURATION
-# -----------------------------------------------------------------------------
-# Label definitions
 LABELS:
   1: "kidney"
   2: "tumor"
   3: "cyst"
 
-# Labels used for computing bounding box (kidney separation)
-BBOX_LABELS: [2]
-
-# Labels to keep in segmentation output (null = all non-zero labels)
+BBOX_LABELS: [1, 2, 3]
 MASK_LABELS: [2]
-# MASK_LABELS: [2]  # Example: tumor only
 
-# -----------------------------------------------------------------------------
-# QUALITY FILTERS
-# -----------------------------------------------------------------------------
-# Minimum number of kidney voxels (0 = no filter)
 MIN_KIDNEY_VOXELS: 20000
-
-# Minimum number of tumor voxels (0 = no filter)
 MIN_TUMOR_VOXELS: 100
 
-# -----------------------------------------------------------------------------
-# EDGE CASE VALIDATION
-# -----------------------------------------------------------------------------
-# Margin in voxels to detect boundary contact
-BOUNDARY_MARGIN: 5
-
-# Expected HU range for soft tissue
-HU_RANGE: [-200, 300]
-
-# -----------------------------------------------------------------------------
-# PATIENT ID EXTRACTION
-# -----------------------------------------------------------------------------
-# Regex pattern to extract patient ID from case name
-# Supports multiple dataset formats:
-#   - UKB25/KiTS: "00_case_00002" -> extracts "case_00002" (removes scan prefix)
-#   - TCGA: "TCGA-XX-YYYY" -> extracts "TCGA-XX-YYYY"
-# Pattern uses alternation (|) with groups - first non-None group is used
 PATIENT_ID_PATTERN: "(?:\\d{2}_)?(case_\\d{5})|^(TCGA-[A-Z0-9]+-[A-Z0-9]+)"
 
-# -----------------------------------------------------------------------------
-# DATA SPLITS GENERATION
-# -----------------------------------------------------------------------------
-# Number of cross-validation folds
 N_FOLDS: 5
-
-# Test set ratio (0.0-1.0)
 TEST_RATIO: 0.1
-
-# Random seed for reproducibility
-RANDOM_SEED: 42
+RANDOM_SEED: 12345          # seed for stratified split reproducibility
+VOI_SUBFOLDER: "images"      # path relative to OUTPUT_DIR (…/voi) containing <class>/<patient_id>/...

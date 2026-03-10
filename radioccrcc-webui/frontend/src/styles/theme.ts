@@ -20,7 +20,7 @@ export const theme = createTheme({
     },
   },
   shape: {
-    borderRadius: 18,
+    borderRadius: 8,
   },
   typography: {
     fontFamily: '"IBM Plex Sans", "Segoe UI", sans-serif',

@@ -6,7 +6,7 @@ Includes PSNR, SSIM, and loss calculations.
 import torch
 import numpy as np
 from pytorch_msssim import ssim
-from typing import Dict, Callable, Any
+from typing import Dict, Callable, Any, Optional
 import logging
 
 logger = logging.getLogger(__name__)
@@ -47,61 +47,68 @@ def ssim_torch(x_hat: torch.Tensor, x: torch.Tensor, data_range: float = 1.0) ->
 
 
 class MetricsCalculator:
-    """
-    Centralized metrics calculation for evaluation.
-    """
-    
-    def __init__(self):
-        self.metrics_functions: Dict[str, Callable] = {
-            "PSNR": psnr_torch,
-            "SSIM": ssim_torch
-        }
-        
-    def compute_batch_metrics(
-        self,
-        reconstruction: torch.Tensor,
-        original: torch.Tensor,
-        data_range: float = 1.0
-    ) -> Dict[str, float]:
-        """
-        Compute all metrics for a single batch.
-        
-        Args:
-            reconstruction: Reconstructed tensor
-            original: Original tensor
-            data_range: Data range for metrics
-            
-        Returns:
-            Dictionary of metric name -> value
-        """
-        results = {}
-        for metric_name, metric_fn in self.metrics_functions.items():
-            try:
-                if metric_name in ["PSNR", "SSIM"]:
-                    value = metric_fn(reconstruction, original, data_range)
-                else:
-                    value = metric_fn(reconstruction, original)
-                    
-                if hasattr(value, 'item'):
-                    value = value.item()
-                results[metric_name] = float(value)
-            except Exception as e:
-                logger.warning(f"Failed to compute {metric_name}: {e}")
-                results[metric_name] = float('nan')
-                
-        return results
-    
-    def aggregate_results(self, all_results: Dict[str, list]) -> Dict[str, float]:
-        """
-        Aggregate batch-wise results into mean values.
-        
-        Args:
-            all_results: Dictionary of metric name -> list of batch values
-            
-        Returns:
-            Dictionary of metric name -> mean value
-        """
-        return {
-            metric_name: float(np.mean(values))
-            for metric_name, values in all_results.items()
-        }
+	"""
+	Centralized metrics calculation for evaluation.
+	"""
+	
+	def __init__(self, normalization_stats: Optional[Dict[str, float]] = None):
+		"""
+		Initialize metrics calculator.
+		
+		Args:
+			normalization_stats: Optional dict with 'median' and 'iqr' for HU conversion
+		"""
+		self.metrics_functions: Dict[str, Callable] = {
+			"PSNR": psnr_torch,
+			"SSIM": ssim_torch
+		}
+		self.norm_stats = normalization_stats or {}
+	
+	def compute_batch_metrics(
+		self,
+		reconstruction: torch.Tensor,
+		original: torch.Tensor,
+		data_range: float = 1.0
+	) -> Dict[str, float]:
+		"""
+		Compute all metrics for a single batch.
+		
+		Args:
+			reconstruction: Reconstructed tensor
+			original: Original tensor
+			data_range: Data range for metrics
+			
+		Returns:
+			Dictionary of metric name -> value
+		"""
+		results = {}
+		for metric_name, metric_fn in self.metrics_functions.items():
+			try:
+				if metric_name in ["PSNR", "SSIM"]:
+					value = metric_fn(reconstruction, original, data_range)
+				else:
+					value = metric_fn(reconstruction, original)
+					
+				if hasattr(value, 'item'):
+					value = value.item()
+				results[metric_name] = float(value)
+			except Exception as e:
+				logger.warning(f"Failed to compute {metric_name}: {e}")
+				results[metric_name] = float('nan')
+				
+		return results
+	
+	def aggregate_results(self, all_results: Dict[str, list]) -> Dict[str, float]:
+		"""
+		Aggregate batch-wise results into mean values.
+		
+		Args:
+			all_results: Dictionary of metric name -> list of batch values
+			
+		Returns:
+			Dictionary of metric name -> mean value
+		"""
+		return {
+			metric_name: float(np.mean(values))
+			for metric_name, values in all_results.items()
+		}

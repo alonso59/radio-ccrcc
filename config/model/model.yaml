@@ -1,25 +1,25 @@
 
 # Model-specific config for the autoencoder
-autoencoder: 
-  spatial_dims: 3 
-  in_channels: 1 
+autoencoder:
+  spatial_dims: 3
+  in_channels: 1
   out_channels: 1
-  num_res_blocks: [2, 2, 2, 2, 2, 2] 
-  channels: [16, 16, 32, 32, 64, 64] 
-  attention_levels: [false, false, false, false, false, false] 
-  latent_channels: 256
-  norm_num_groups: 16 
-  norm_eps: 0.000001 
-  with_encoder_nonlocal_attn: false 
-  with_decoder_nonlocal_attn: false 
-  use_checkpoint: false 
-  use_convtranspose: true 
-  include_fc: false 
-  use_combined_linear: false 
-  use_flash_attention: false 
-  pretrain: false 
+  num_res_blocks: [2, 2, 2, 2]
+  channels: [16, 32, 32, 64]
+  attention_levels: [false, false, false, true]
+  latent_channels: 16
+  norm_num_groups: 16
+  norm_eps: 0.000001
+  with_encoder_nonlocal_attn: false
+  with_decoder_nonlocal_attn: false
+  use_checkpoint: false
+  use_convtranspose: true
+  include_fc: false
+  use_combined_linear: false
+  use_flash_attention: false
+  pretrain: false
   freeze: false
-  pretrained_path: /home/alonso/Documents/radio-ccrcc/outputs/2026-01-08/21-09-40/checkpoints/best_autoencoder.pth
+  pretrained_path: /home/alonso/Documents/radio-ccrcc/results/Dataset620_ldm_vae/fold_0/latest/checkpoint_best.pth
 
 discriminator:
   spatial_dims: 3

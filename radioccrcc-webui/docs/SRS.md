@@ -4,9 +4,9 @@
 
 | Field          | Value                                       |
 |----------------|---------------------------------------------|
-| **Version**    | 1.0                                         |
-| **Date**       | 2026-03-04                                  |
-| **Status**     | Approved for implementation                 |
+| **Version**    | 1.2                                         |
+| **Date**       | 2026-03-05                                  |
+| **Status**     | Baseline implemented (living specification) |
 | **Project**    | radio-ccrcc / Radiology WebUI               |
 | **Author**     | Alonso (researcher) + GitHub Copilot (SRS)  |
 
@@ -45,7 +45,10 @@ This document specifies the requirements for a lightweight, local-first Web-base
 - Pan, zoom, window/level (W/L) adjustment, crosshair synchronization.
 - Persist user preferences (last patient, W/L, opacity, visible layers).
 - Simple token-based authentication for single-user local sessions.
-- Run in a single container compatible with `udocker`.
+- Reviewer workflow in Viewer: patient/group navigator, next-patient loading,
+  staged phase reclassification (`NC/ART/VEN`), staged delete-to-recycle, and
+  apply-with-confirmation with audit logs.
+- Run as one web service image (backend + compiled frontend), compatible with `docker`, `podman`, and `udocker`.
 
 **Out of scope (v1.0):**
 
@@ -84,14 +87,16 @@ The WebUI replaces the Jupyter-based visualizers (`nifti_visualizer.ipynb`, `voi
 | Host OS         | Linux (primary), macOS (secondary)                            |
 | Container       | OCI image run via `udocker`, `podman`, or `docker`            |
 | Browser         | Chromium-based (Chrome, Edge, Brave) or Firefox, latest 2 ESR |
-| Data mount      | Host path bind-mounted read-only at `/data` inside container  |
+| Data mount      | Host path bind-mounted at `/data`; write access required only for review apply operations |
 | Network         | `localhost` only; no external upload                          |
 
 ### 2.3 Constraints
 
-- **Single container**: no Docker Compose or multi-service orchestration (udocker limitation).
-- **CPU-only rendering**: no GPU passthrough required; 3D surface mesh computed server-side or via vtk.js client-side.
-- **Read-only data**: the viewer never modifies, moves, or deletes files on the mounted path.
+- **Single service runtime**: backend API and compiled frontend are served by one container process.
+- **Compose optional**: native Docker/Podman can use `docker-compose.yml` for convenience; `udocker` can run the same OCI image without compose.
+- **CPU-only rendering**: no GPU passthrough required; 3D surface mesh is generated server-side and rendered client-side with three.js.
+- **Controlled data mutations**: only the explicit review-apply workflow may
+  move/update dataset files, and only when `ALLOW_DATA_MUTATIONS=true`.
 
 ### 2.4 Assumptions
 
@@ -116,7 +121,10 @@ DatasetID/
 ├── dataset_fingerprint.json               # Preprocessor fingerprint
 ├── patient_preprocess.csv                 # Preprocessor per-patient log
 ├── splits.json                            # Train/val/test splits
-├── decisions.json                         # Viewer review decisions
+├── decisions.json                         # Viewer review audit log (append-only)
+├── reclassification_log.json              # Batch reclassification report
+├── deletion_log.json                      # Batch deletion report
+├── deleted/                               # Recycle bin for NIfTI/SEG file moves
 │
 ├── nifti/                                 # Full CT volumes (flat)
 │   ├── 01_case_00001_0000.nii.gz
@@ -142,6 +150,7 @@ DatasetID/
     │
     └── mask/{group}/{patient_id}/{phase}/
         └── NN_case_YYYYY_side{L,R}.npy
+    └── deleted/                           # Recycle bin for VOI image/mask moves
 ```
 
 ### 3.2 Naming Conventions
@@ -232,7 +241,7 @@ When `manifest.csv` is absent, the system falls back to filename-based discovery
 | FR-30    | **3D Surface Rendering**: When a segmentation mask exists, generate and display an isosurface mesh (marching cubes) for each visible label. | Must |
 | FR-31    | **3D Blend Slider**: A global opacity/blend slider controls the transparency of the 3D surface rendering (range 0.0–1.0). | Must |
 | FR-32    | **3D Rotate/Zoom**: User can orbit, pan, and zoom in the 3D viewport.                                    | Must      |
-| FR-33    | **Empty 3D Panel**: When no mask is available, the 3D panel displays an empty dark canvas with an informational label ("No segmentation available"). Same behavior as 3D Slicer with no loaded segmentation. | Must |
+| FR-33    | **Empty 3D Panel**: When no mask is available, the 3D panel displays an informational empty-state view ("No segmentation available") in the same panel slot. | Must |
 | FR-34    | **Per-Label 3D Visibility**: Layer visibility toggles (FR-22) also apply to the 3D panel.                 | Should    |
 | FR-35    | **3D Color Consistency**: Surface colors match the 2D overlay colors (cyan=kidney, yellow=tumor, magenta=cyst). | Must |
 
@@ -252,14 +261,30 @@ When `manifest.csv` is absent, the system falls back to filename-based discovery
 | FR-50    | **Persist Last Patient**: Store last viewed patient ID per dataset so the user resumes where they left off. | Should |
 | FR-51    | **Persist W/L Settings**: Save last-used window/level values per dataset.                                 | Should    |
 | FR-52    | **Persist Layer Visibility**: Save layer on/off and opacity settings.                                     | Should    |
-| FR-53    | **Settings Storage**: Preferences stored server-side as a JSON file (`<dataset>/viewer_settings.json`) or in browser `localStorage`. | Should |
+| FR-53    | **Settings Storage**: Preferences are persisted server-side in a JSON file (default `~/.radiology-webui/settings.json`, fallback `/tmp/radiology-webui/settings.json`) keyed by dataset ID. | Should |
 
 ### 4.7 Authentication
 
 | ID       | Requirement                                                                                              | Priority  |
 |----------|----------------------------------------------------------------------------------------------------------|-----------|
-| FR-60    | **Simple Auth**: A single shared token or password protects the web interface. Configurable via environment variable (`RADIOLOGY_UI_TOKEN`). | Should |
-| FR-61    | **Session Persistence**: Once authenticated, the session persists until browser close or explicit logout.  | Should    |
+| FR-60    | **Simple Auth**: A single shared bearer token protects API routes (`/api/*`, excluding `/api/health`). Token is configured via environment variable (`RADIOLOGY_UI_TOKEN`). | Should |
+| FR-61    | **Session Persistence**: Auth token is memory-only by default; optional browser persistence via `VITE_AUTH_TOKEN_STORAGE=local`. No dedicated logout control is required in v1.0. | Should |
+
+### 4.8 Reviewer Workflow (Viewer Page)
+
+| ID       | Requirement                                                                                              | Priority  |
+|----------|----------------------------------------------------------------------------------------------------------|-----------|
+| FR-70    | **Viewer Patient Selector**: Viewer page provides a patient dropdown (`case_YYYYY`) for direct patient switching inside the dataset context. | Must |
+| FR-71    | **Viewer Group Filter**: Viewer page provides a group filter with `All` plus dynamic dataset groups (`A`, `B`, `NG`, etc.). | Must |
+| FR-72    | **Next Patient Button**: Viewer page provides `Load Next Patient` that follows sorted patient order within the active group filter. | Must |
+| FR-73    | **Phase Decision Control**: Viewer page provides a phase decision selector limited to `NC`, `ART`, `VEN` for the currently selected series. | Must |
+| FR-74    | **Delete Decision Control**: Viewer page provides delete decision for the currently selected series using recycle-bin semantics (never hard delete). | Must |
+| FR-75    | **Staged Queue + Apply**: Review actions are staged client-side (current patient scope) and only executed after explicit confirmation in `Apply Changes`. | Must |
+| FR-76    | **Apply Endpoint**: `POST /api/datasets/{dataset_id}/review/apply` executes queued operations and returns per-operation status (`applied`, `skipped`, `failed`) plus batch summary. | Must |
+| FR-77    | **Mutation Safety Gate**: Review apply is rejected with `409` unless `ALLOW_DATA_MUTATIONS=true`. | Must |
+| FR-78    | **Audit Artifacts**: Applying review actions appends records to `<dataset>/decisions.json` and updates batch logs `<dataset>/reclassification_log.json`, `<dataset>/deletion_log.json`. | Must |
+| FR-79    | **NIfTI Reclassify Rule**: For NIfTI series, reclassification updates `manifest.csv` (`phase`, `protocol_source`) if present and does not move NIfTI files. | Must |
+| FR-80    | **Recycle Paths**: NIfTI/SEG delete moves files under `<dataset>/deleted/...`; VOI delete moves files under `<dataset>/voi/deleted/...`. | Must |
 
 ---
 
@@ -272,7 +297,7 @@ When `manifest.csv` is absent, the system falls back to filename-based discovery
 | NFR-03   | **3D Mesh Generation**: Initial marching-cubes computation completes in < 5 seconds for typical segmentation size. | < 5 s |
 | NFR-04   | **Memory Footprint**: Backend holds at most 2 volumes in memory simultaneously (current + preloaded next). | ≤ 2 volumes |
 | NFR-05   | **Container Image Size**: Final OCI image ≤ 1.5 GB (Python runtime + Node build + dependencies).          | ≤ 1.5 GB   |
-| NFR-06   | **Read-Only Data**: Application never writes to the mounted dataset path. Settings stored separately.      | Mandatory  |
+| NFR-06   | **Controlled Mutations Only**: Dataset writes are allowed only through confirmed review apply operations (phase reclassify/delete recycle) with audit logs. | Mandatory  |
 | NFR-07   | **Privacy / Local-Only**: No data leaves the host. No telemetry, analytics, or external API calls.         | Mandatory  |
 | NFR-08   | **Browser Compatibility**: Chrome 100+, Firefox 100+, Edge 100+.                                           | Must       |
 | NFR-09   | **Maintainability**: Backend services are modular (one file per concern). Frontend uses typed TypeScript with component isolation. | Must |
@@ -301,7 +326,9 @@ When `manifest.csv` is absent, the system falls back to filename-based discovery
                            ▼
 ┌──────────────────────────────────────────────────────────┐
 │  [3] Viewer Page (main workspace)                          │
-│   • Header: patient ID, series selector, layer controls    │
+│   • Header: group filter, patient selector, next-patient   │
+│   • Series selector + review queue controls (phase/delete) │
+│   • Apply changes confirmation for staged review actions   │
 │   • 2×2 grid: Axial | Sagittal | Coronal | 3D              │
 │   • Bottom bar: slice sliders, W/L controls                 │
 │   • Expand/restore per panel                                │
@@ -312,7 +339,10 @@ When `manifest.csv` is absent, the system falls back to filename-based discovery
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│ Patient: case_00042  │ Series: [▼ 01_ART ▼]  │ 🟢Kidney 🟡Tumor   │
+│ Group: [▼ All ▼]  Patient: [▼ case_00042 ▼]  [Load Next Patient]   │
+│ Series: [▼ 01_case_00042_0000 ▼]  Decision: [▼ NC/ART/VEN ▼]       │
+│ [Queue Reclassify] [Queue Delete] [Clear Pending] [Apply Changes]   │
+│                                                       🟢Kidney 🟡Tumor │
 ├────────────────────────────┬────────────────────────────────────────┤
 │                            │                                        │
 │        AXIAL               │        SAGITTAL                        │
@@ -357,14 +387,21 @@ Dark theme (inspired by 3D Slicer dark mode):
 | Navigate slice          | Scroll wheel / slider      | Update slice index in that view           |
 | Adjust W/L              | Right-click drag on 2D     | Horizontal=width, vertical=level          |
 | Pan                     | Middle-click drag (or Shift+left) | Move viewport origin              |
-| Zoom                    | Ctrl+scroll / pinch        | Zoom in/out centered on cursor            |
+| Zoom                    | Ctrl/Cmd+scroll on panel   | Zoom in/out centered on cursor; prevents browser page zoom in-panel |
+| Reset view fit          | `Fit` button / double-click slice viewport | Reset panel pan+zoom to fitted defaults |
 | Crosshair click         | Left-click on 2D view      | Sets crosshair position, syncs all views  |
-| Expand panel            | Double-click header        | Panel fills full viewer area              |
-| Restore grid            | Double-click or Esc        | Return to 2×2 layout                     |
+| Expand panel            | Expand button / header double-click | Panel fills full viewer area       |
+| Restore grid            | Restore button / header double-click / Esc | Return to 2×2 layout             |
 | Orbit 3D                | Left-click drag on 3D      | Rotate camera around subject              |
 | Zoom 3D                 | Scroll on 3D panel         | Dolly camera in/out                       |
 | Toggle layer            | Click checkbox             | Show/hide label in 2D overlay + 3D mesh   |
 | Change opacity          | Drag slider                | Adjust alpha for selected label            |
+| Filter by group         | Group dropdown             | Restrict viewer patient dropdown + next sequence |
+| Switch patient          | Patient dropdown           | Navigate to selected patient without leaving viewer |
+| Load next patient       | Button click               | Navigate to next filtered patient          |
+| Stage reclassification  | Phase selector + queue button | Add `NC/ART/VEN` action for selected series |
+| Stage delete            | Queue delete button        | Add delete action for selected series      |
+| Apply staged actions    | Apply button + confirmation| Execute filesystem/manifest updates and write audit logs |
 
 ---
 
@@ -374,27 +411,29 @@ Dark theme (inspired by 3D Slicer dark mode):
 
 | Layer        | Technology                  | Rationale                                            |
 |--------------|-----------------------------|------------------------------------------------------|
-| Backend      | **Python 3.11 + FastAPI**   | Native nibabel/numpy; async; lightweight             |
-| Frontend     | **React 18 + TypeScript**   | Type safety; component model; rich ecosystem         |
-| 2D Rendering | **Cornerstone3D** (or **Niivue**) | Purpose-built medical image 2D/MPR viewer     |
-| 3D Rendering | **vtk.js** (via Cornerstone3D) or **three.js** | Isosurface rendering in browser     |
-| Bundler      | **Vite**                    | Fast builds; works well with TypeScript + React      |
-| Container    | **OCI / Docker**            | Single-stage build; udocker-compatible               |
+| Backend      | **Python 3.12 + FastAPI**   | Native nibabel/numpy stack; lightweight API + static serving |
+| Frontend     | **React 19 + TypeScript + MUI** | Typed UI and reusable component primitives       |
+| 2D Rendering | **Server-rendered PNG slices + React interaction layer** | Notebook-aligned render pipeline with simple browser display |
+| 3D Rendering | **three.js via @react-three/fiber + GLTFLoader** | Interactive rendering of server-generated GLB meshes |
+| Bundler      | **Vite 7**                  | Fast TypeScript builds and dev-server proxy          |
+| Container    | **Multi-stage OCI image**   | Node build stage + Python runtime stage, non-root runtime user |
 
 ### 7.2 Backend Architecture
 
 ```
 backend/
 ├── app/
-│   ├── main.py                # FastAPI app, static file serving, CORS, auth
+│   ├── main.py                # FastAPI app, router mounting, static SPA serving
 │   ├── config.py              # Settings from env vars (token, log level, paths)
+│   │
+│   ├── middleware/
+│   │   └── auth.py            # Bearer auth middleware for /api/*
 │   │
 │   ├── api/
 │   │   ├── datasets.py        # GET /api/datasets — list available datasets
-│   │   ├── patients.py        # GET /api/datasets/{id}/patients
-│   │   ├── series.py          # GET /api/datasets/{id}/patients/{pid}/series
-│   │   ├── slices.py          # GET /api/slices/{axis}/{index} — returns PNG
+│   │   ├── slices.py          # POST load + GET /api/slice/{axis}/{index}
 │   │   ├── mesh.py            # GET /api/mesh/{label} — returns GLB/OBJ
+│   │   ├── review.py          # POST /api/datasets/{id}/review/apply
 │   │   └── settings.py        # GET/PUT /api/settings
 │   │
 │   ├── services/
@@ -404,20 +443,26 @@ backend/
 │   │   ├── mask_loader.py     # Segmentation mask load + label extraction
 │   │   ├── slice_renderer.py  # Extract 2D slice as PNG (with overlay)
 │   │   ├── mesh_generator.py  # Marching cubes → GLB/OBJ mesh
-│   │   └── settings_store.py  # JSON-based persistence
+│   │   ├── settings_store.py  # JSON-based persistence
+│   │   ├── review_apply.py    # Reclassify/delete apply + audit logs
+│   │   └── volume_cache.py    # LRU series cache + expiring load handles
 │   │
 │   └── models/
-│       ├── patient.py         # Pydantic models for API responses
-│       └── dataset.py         # Dataset and series models
+│       ├── dataset.py         # Dataset/patient/series/volume response models
+│       ├── review.py          # Review operation and batch result models
+│       └── settings.py        # Per-dataset viewer settings payload
 │
 └── requirements.txt
 ```
 
 **Key backend design decisions:**
 
-- **Slice-as-PNG API**: The backend renders 2D slices server-side as PNG images (grayscale + optional overlay). This avoids transferring raw float arrays to the browser and reduces frontend complexity. Alternative: raw array transfer + client-side rendering (may be adopted in v2.0 for smoother interaction).
-- **Mesh-as-GLB API**: 3D meshes are generated server-side via `skimage.measure.marching_cubes` and served as binary GLB files. The frontend loads them into vtk.js or three.js.
-- **Volume cache**: Keep the current volume + segmentation in memory. Evict on patient/series change.
+- **Slice-as-PNG API**: The backend renders 2D slices server-side as PNG images (grayscale + optional overlay), keeping notebook-equivalent orientation and label rendering.
+- **Load handle contract**: Series load returns `load_handle`; slice and mesh calls require it so stale/expired cache state can be rejected explicitly (`410`).
+- **Mesh-as-GLB API**: 3D meshes are generated server-side via `skimage.measure.marching_cubes` and served as binary GLB files.
+- **Volume cache**: In-memory LRU cache for up to 2 volumes plus expiring handle registry for safe revalidation.
+- **Review apply gate**: dataset mutation endpoints are blocked unless `ALLOW_DATA_MUTATIONS=true`.
+- **Audit-first mutation flow**: phase/delete operations append audit events and keep deleted files recoverable in recycle paths.
 
 ### 7.3 Frontend Architecture
 
@@ -433,38 +478,26 @@ frontend/
 │   │   └── ViewerPage.tsx
 │   │
 │   ├── components/
-│   │   ├── layout/
-│   │   │   ├── ViewerGrid2x2.tsx        # 2×2 panel grid with expand/restore
-│   │   │   └── ExpandablePanel.tsx      # Single panel with expand button
-│   │   │
-│   │   ├── viewers/
-│   │   │   ├── SliceView.tsx            # 2D slice display (Axial/Cor/Sag)
-│   │   │   ├── Surface3DView.tsx        # 3D mesh viewer
-│   │   │   └── CrosshairOverlay.tsx     # Synchronized crosshair lines
-│   │   │
-│   │   ├── controls/
-│   │   │   ├── SliceSlider.tsx          # Slice navigation slider
-│   │   │   ├── WindowLevelControl.tsx   # W/L drag control + presets
-│   │   │   ├── LayerToggle.tsx          # Per-label visibility checkbox
-│   │   │   ├── OpacitySlider.tsx        # Per-label opacity slider
-│   │   │   ├── BlendSlider.tsx          # 3D blend/opacity slider
-│   │   │   └── SeriesSelector.tsx       # Dropdown for patient series
-│   │   │
-│   │   └── navigation/
-│   │       ├── DatasetBrowser.tsx       # Folder tree / card selector
-│   │       ├── PatientTable.tsx         # Sortable/filterable patient list
-│   │       └── SearchBar.tsx            # Patient ID search + filters
-│   │
-│   ├── services/
-│   │   └── api.ts                       # Typed fetch wrappers for all endpoints
+│   │   ├── LoginDialog.tsx              # Token prompt for 401 retry flow
+│   │   └── viewer/
+│   │       ├── ViewerGrid2x2.tsx        # 2×2 panel grid with expand/restore
+│   │       ├── ExpandablePanel.tsx      # Panel chrome with expand/restore controls
+│   │       ├── SliceView.tsx            # 2D slice display (Axial/Cor/Sag)
+│   │       ├── Surface3DView.tsx        # 3D mesh viewer
+│   │       ├── SliceSlider.tsx          # Slice navigation slider
+│   │       ├── WindowLevelControl.tsx   # W/L presets
+│   │       ├── LayerToggle.tsx          # Per-label visibility checkbox
+│   │       ├── OpacitySlider.tsx        # Per-label opacity slider
+│   │       ├── BlendSlider.tsx          # 3D blend/opacity slider
+│   │       ├── SeriesSelector.tsx       # Dropdown for patient series
+│   │       ├── useSliceNavigation.ts    # Crosshair/slice synchronization state
+│   │       └── useWindowLevel.ts        # W/L state + presets
 │   │
 │   ├── hooks/
-│   │   ├── useSliceNavigation.ts
-│   │   ├── useWindowLevel.ts
-│   │   └── useSettings.ts
+│   │   └── useSettings.ts               # Persisted settings hydration/sync
 │   │
-│   ├── types/
-│   │   └── index.ts                     # Shared TypeScript interfaces
+│   ├── services/
+│   │   └── api.ts                       # Typed API client + auth retry interceptors
 │   │
 │   └── styles/
 │       └── theme.ts                     # Dark theme tokens
@@ -474,103 +507,132 @@ frontend/
 └── vite.config.ts
 ```
 
+**Key frontend design decisions:**
+
+- **Stateful API wrapper**: Axios interceptors manage bearer token injection and 401 re-prompt flow.
+- **Load-handle aware rendering**: Viewer data requests are tied to `load_handle` so stale series state can recover by reloading.
+- **Smooth refresh behavior**: 2D/3D panels keep previous content during transient refresh failures where possible, reducing visible flicker.
+
 ### 7.4 API Contract (Summary)
 
-| Method | Endpoint                                                 | Returns                  | Description                                 |
-|--------|----------------------------------------------------------|--------------------------|---------------------------------------------|
-| GET    | `/api/datasets`                                          | `Dataset[]`              | List available dataset folders              |
-| GET    | `/api/datasets/{dsid}/patients`                          | `Patient[]`              | List patients in dataset                    |
-| GET    | `/api/datasets/{dsid}/patients/{pid}/series`             | `Series[]`               | List series for patient                     |
-| POST   | `/api/datasets/{dsid}/patients/{pid}/series/{sid}/load`  | `VolumeInfo`             | Load volume into memory, return shape/spacing |
-| GET    | `/api/slice/{axis}/{index}?ww=400&wl=50&layers=1,2`     | `image/png`              | Render 2D slice as PNG                      |
-| GET    | `/api/mesh/{label}?smooth=true`                          | `model/gltf-binary`      | Get 3D surface mesh                         |
-| GET    | `/api/settings`                                          | `Settings`               | Get persisted user preferences              |
-| PUT    | `/api/settings`                                          | `Settings`               | Save user preferences                       |
+| Method | Endpoint                                                                              | Returns                  | Description                                 |
+|--------|---------------------------------------------------------------------------------------|--------------------------|---------------------------------------------|
+| GET    | `/api/health`                                                                         | `{"status":"ok"}`        | Backend health check                        |
+| GET    | `/api/datasets`                                                                       | `Dataset[]`              | List available dataset folders              |
+| GET    | `/api/datasets/{dataset_id}/patients`                                                 | `Patient[]`              | List patients in dataset                    |
+| GET    | `/api/datasets/{dataset_id}/patients/{patient_id}/series`                             | `Series[]`               | List series for patient                     |
+| POST   | `/api/datasets/{dataset_id}/patients/{patient_id}/series/{series_id}/load`            | `VolumeInfo`             | Load volume into cache and return `load_handle`, shape, spacing, labels |
+| GET    | `/api/slice/{axis}/{index}?load_handle=...&ww=...&wl=...&layers=1,2&opacity_1=...`   | `image/png`              | Render 2D slice from cached series          |
+| GET    | `/api/mesh/{label}?load_handle=...&smooth=true`                                       | `model/gltf-binary`      | Get 3D surface mesh for one label           |
+| POST   | `/api/datasets/{dataset_id}/review/apply`                                              | `ReviewApplyResponse`    | Apply staged reclassify/delete operations with audit logging |
+| GET    | `/api/settings`                                                                       | `Settings`               | Get persisted dataset-scoped viewer prefs   |
+| PUT    | `/api/settings`                                                                       | `Settings`               | Save persisted dataset-scoped viewer prefs  |
 
 ### 7.5 Data Flow
 
 ```
-[Browser]                          [FastAPI Backend]              [Filesystem]
-    │                                     │                            │
-    │  GET /api/datasets                  │                            │
-    │ ──────────────────────────────────► │  scan /data/*/             │
-    │                                     │ ──────────────────────────►│
-    │  ◄────── Dataset[]                  │  ◄─── folder list          │
-    │                                     │                            │
-    │  GET /api/.../patients              │                            │
-    │ ──────────────────────────────────► │  parse manifest.csv        │
-    │                                     │  + scan nifti/, seg/, voi/ │
-    │  ◄────── Patient[]                  │                            │
-    │                                     │                            │
-    │  POST /api/.../load                 │                            │
-    │ ──────────────────────────────────► │  nib.load() → RAS → cache │
-    │  ◄────── VolumeInfo{shape,spacing}  │                            │
-    │                                     │                            │
-    │  GET /api/slice/axial/120           │                            │
-    │ ──────────────────────────────────► │  extract slice → PNG       │
-    │  ◄────── image/png                  │                            │
-    │                                     │                            │
-    │  GET /api/mesh/2                    │                            │
-    │ ──────────────────────────────────► │  marching_cubes → GLB      │
-    │  ◄────── model/gltf-binary          │                            │
+[Browser]                          [FastAPI Backend]                    [Filesystem]
+    │                                     │                                  │
+    │  GET /api/datasets                  │                                  │
+    │ ──────────────────────────────────► │  scan DATA_ROOT/Dataset*/        │
+    │                                     │ ─────────────────────────────────►│
+    │  ◄────── Dataset[]                  │  ◄─── folder list                │
+    │                                     │                                  │
+    │  GET /api/.../patients              │                                  │
+    │ ──────────────────────────────────► │  parse manifest.csv + scan trees │
+    │  ◄────── Patient[]                  │                                  │
+    │                                     │                                  │
+    │  POST /api/.../load                 │                                  │
+    │ ──────────────────────────────────► │  load volume/mask → cache        │
+    │  ◄────── VolumeInfo{load_handle,...}│                                  │
+    │                                     │                                  │
+    │  GET /api/slice/... ?load_handle=H  │                                  │
+    │ ──────────────────────────────────► │  cache lookup + render PNG       │
+    │  ◄────── image/png                  │                                  │
+    │                                     │                                  │
+    │  GET /api/mesh/... ?load_handle=H   │                                  │
+    │ ──────────────────────────────────► │  marching_cubes → GLB            │
+    │  ◄────── model/gltf-binary          │                                  │
+    │                                     │                                  │
+    │  POST /api/.../review/apply         │                                  │
+    │ ──────────────────────────────────► │  validate + apply batch ops      │
+    │                                     │  (manifest update / file moves)  │
+    │                                     │ ─────────────────────────────────►│
+    │  ◄────── batch summary + per-op     │  append decisions + logs         │
 ```
 
 ---
 
 ## 8. Deployment
 
-### 8.1 Dockerfile (Single-Stage Concept)
+### 8.1 Dockerfile (Implemented Multi-Stage Image)
 
 ```dockerfile
-FROM python:3.11-slim AS backend
-WORKDIR /app
-COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-COPY backend/ .
-
-FROM node:20-alpine AS frontend
-WORKDIR /web
-COPY frontend/package.json frontend/package-lock.json ./
+FROM node:20-slim AS frontend-build
+WORKDIR /build/frontend
+COPY frontend/package*.json ./
 RUN npm ci
-COPY frontend/ .
+COPY frontend/ ./
 RUN npm run build
 
-FROM python:3.11-slim
+FROM python:3.12-slim AS runtime
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    DATA_ROOT=/data
 WORKDIR /app
-COPY --from=backend /app /app
-COPY --from=frontend /web/dist /app/static
+COPY backend/requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt
+RUN addgroup --system app && adduser --system --ingroup app app
+COPY --chown=app:app backend /app/backend
+COPY --chown=app:app --from=frontend-build /build/frontend/dist /app/static
 EXPOSE 8000
-ENV RADIOLOGY_UI_TOKEN=""
-ENV LOG_LEVEL="info"
+WORKDIR /app/backend
+HEALTHCHECK --interval=20s --timeout=5s --start-period=20s --retries=5 \
+  CMD python -c "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3).status==200 else 1)"
+USER app
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 ```
 
-### 8.2 udocker Run Command
+### 8.2 Native Docker/Podman (Recommended)
 
 ```bash
-# 1. Load image
-udocker load -i radiology-ui_1.0.tar
-
-# 2. Create container
-udocker create --name=radio-ui radiology-ui:1.0
-
-# 3. Run with mounted dataset
-udocker run \
-  -p 8000:8000 \
-  -v /path/to/data/dataset:/data:ro \
-  -e RADIOLOGY_UI_TOKEN=mysecret \
-  radio-ui
+cp .env.example .env
+# edit DATASET_DIR and optional RADIOLOGY_UI_TOKEN
+docker compose up -d --build
 ```
 
-### 8.3 Configuration (Environment Variables)
+### 8.3 udocker Runtime Path (Fallback)
 
-| Variable              | Default         | Description                                    |
-|-----------------------|-----------------|------------------------------------------------|
-| `RADIOLOGY_UI_TOKEN`  | `""` (no auth)  | Token for simple authentication                |
-| `DATA_ROOT`           | `/data`         | Mount point for dataset files                  |
-| `LOG_LEVEL`           | `info`          | Python logging level                           |
-| `HOST`                | `0.0.0.0`       | Bind address                                   |
-| `PORT`                | `8000`          | Bind port                                      |
+Use `udocker` when native Docker/Podman is unavailable. The runtime contract is the same image and environment variables as native OCI runtime.
+
+```bash
+# Example pattern (image must exist locally or be pulled beforehand)
+python udocker.py run \
+  -p 8000:8000 \
+  -v /path/to/data/dataset:/data:rw \
+  -e RADIOLOGY_UI_TOKEN=mysecret \
+  -e ALLOW_DATA_MUTATIONS=true \
+  radiology-ui:1.0
+```
+
+### 8.4 Configuration (Environment Variables)
+
+| Variable                    | Default          | Description                                                  |
+|----------------------------|------------------|--------------------------------------------------------------|
+| `RADIOLOGY_UI_TOKEN`       | `""` (no auth)   | Bearer token for API protection (`/api/*`, except health)    |
+| `DATA_ROOT`                | `/data`          | Mount point for dataset files                                |
+| `LOG_LEVEL`                | `info`           | Python logging level                                         |
+| `ALLOW_DATA_MUTATIONS`     | `false`          | Enables review apply (reclassify/delete) filesystem writes   |
+| `PORT`                     | `8000`           | Uvicorn bind port                                            |
+| `STATIC_ROOT`              | `/app/static`    | Frontend static build directory served by backend            |
+| `VITE_AUTH_TOKEN_STORAGE`  | `memory`         | Frontend token persistence mode (`memory` or `local`)        |
+
+### 8.5 Compose Host Variables (`.env`)
+
+| Variable       | Default            | Description                                  |
+|----------------|--------------------|----------------------------------------------|
+| `DATASET_DIR`  | `./data/dataset`   | Host dataset directory mounted at `/data` (rw for review apply) |
+| `WEBUI_PORT`   | `8000`             | Host port mapped to container `8000`         |
 
 ---
 
@@ -599,13 +661,18 @@ udocker run \
 | 5  | W/L drag adjusts intensity in real time.                                                               | Manual test        |
 | 6  | If segmentation mask exists, overlay appears with contour borders; toggling layers works.              | Manual test        |
 | 7  | If segmentation mask exists, 3D panel shows surface mesh; blend slider controls transparency.          | Manual test        |
-| 8  | If no mask exists, 3D panel shows dark canvas with "No segmentation available" label.                  | Manual test        |
+| 8  | If no mask exists, 3D panel shows an empty-state view with "No segmentation available" messaging.       | Manual test        |
 | 9  | Double-click on any panel expands it; double-click again restores 2×2.                                 | Manual test        |
 | 10 | VOI `.npy` series are loadable and displayable with the same interaction as NIfTI series.              | Manual test        |
-| 11 | Application runs via `udocker run` with a single `docker load` + `create` + `run` sequence.           | Deployment test    |
-| 12 | No files are modified on the mounted dataset path (`/data`).                                           | Audit / strace     |
-| 13 | Setting `RADIOLOGY_UI_TOKEN` blocks unauthenticated access.                                            | Manual test        |
+| 11 | Application runs via `docker compose up` (native Docker/Podman) or equivalent `udocker run` fallback. | Deployment test    |
+| 12 | Dataset mutations occur only through `review/apply` when `ALLOW_DATA_MUTATIONS=true`; no hard deletes. | Audit / strace     |
+| 13 | Setting `RADIOLOGY_UI_TOKEN` blocks unauthenticated `/api/*` access (except `/api/health`).           | Manual test        |
 | 14 | Last-viewed patient and W/L settings persist across browser refresh.                                   | Manual test        |
+| 15 | Viewer group filter + patient dropdown + next button navigate patients correctly in filtered order.    | Manual test        |
+| 16 | Applying queued `NC/ART/VEN` reclassify updates NIfTI manifest phase/protocol_source when available.   | Manual test        |
+| 17 | Applying queued delete moves NIfTI/SEG and VOI image/mask files into recycle paths.                    | Manual test        |
+| 18 | `decisions.json`, `reclassification_log.json`, and `deletion_log.json` are appended per apply batch.   | Manual test        |
+| 19 | With `ALLOW_DATA_MUTATIONS=false`, review apply endpoint returns `409` and no dataset files are changed.| Manual test        |
 
 ---
 
@@ -627,4 +694,4 @@ udocker run \
 
 ---
 
-*End of SRS v1.0*
+*End of SRS v1.2*

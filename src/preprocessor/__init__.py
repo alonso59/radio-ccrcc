@@ -1,29 +1,21 @@
-"""
-VOI Preprocessor Package
+"""VOI Preprocessor: kidney VOI extraction from CT scans."""
 
-A modular preprocessing pipeline for extracting kidney VOIs from CT scans.
-Supports both .npy and .nii.gz input formats, outputs to .npy.
+__version__ = "4.0.0"
 
-Output structure:
-    {OUTPUT_DIR}/
-    ├── mask/{class}/{patient_id}/{case_name}_{side}.npy
-    ├── segmentation/{class}/{patient_id}/{case_name}_{side}.npy
-    ├── dataset.json
-    ├── dataset_fingerprint.json
-    └── sanity_check.json
 
-Usage:
-    from preprocessor import VOIPreprocessor, load_config
-    
-    config = load_config('preprocessor_config.yaml')
-    pipeline = VOIPreprocessor(config)
-    results = pipeline.run_batch()
-"""
+def load_config(path):
+    """Load YAML config and derive OUTPUT_DIR from DATASET_ID when needed."""
+    from pathlib import Path
+    import yaml
 
-from .core.config import load_config
-from .core.pipeline import VOIPreprocessor
-from .analysis.sanity_check import SanityChecker
-from .analysis.edge_case_analyzer import EdgeCaseAnalyzer
+    path = Path(path)
+    assert path.exists(), f"Config not found: {path}"
 
-__all__ = ['VOIPreprocessor', 'load_config', 'SanityChecker', 'EdgeCaseAnalyzer']
-__version__ = '1.0.0'
+    with open(path) as f:
+        cfg = yaml.safe_load(f)
+
+    if not cfg.get("OUTPUT_DIR") and cfg.get("DATASET_ID"):
+        base = cfg.get("OUTPUT_BASE", "data/dataset")
+        cfg["OUTPUT_DIR"] = str(Path(base) / f"Dataset{cfg['DATASET_ID']}" / "voi")
+
+    return cfg

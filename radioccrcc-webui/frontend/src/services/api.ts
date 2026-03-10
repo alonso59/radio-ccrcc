@@ -1,9 +1,14 @@
 import axios from 'axios'
 
 export const AUTH_TOKEN_STORAGE_KEY = 'radiology-ui-token'
+const TOKEN_STORAGE_MODE = (import.meta.env.VITE_AUTH_TOKEN_STORAGE ?? 'memory').toLowerCase()
+const USE_LOCAL_STORAGE_TOKEN = TOKEN_STORAGE_MODE === 'local'
+let memoryAuthToken = ''
 
 export type Axis = 'axial' | 'coronal' | 'sagittal'
 export type SeriesType = 'nifti' | 'voi'
+export type ReviewAction = 'reclassify' | 'delete'
+export type PhaseDecision = 'NC' | 'ART' | 'VEN'
 
 export interface HealthStatus {
   status: string
@@ -11,7 +16,6 @@ export interface HealthStatus {
 
 export interface DatasetSummary {
   dataset_id: string
-  path: string
   patient_count: number
   has_nifti: boolean
   has_seg: boolean
@@ -37,13 +41,12 @@ export interface SeriesInfo {
   phase: string | null
   laterality: string | null
   filename: string
-  image_path: string
-  mask_path: string | null
   has_seg: boolean
 }
 
 export interface VolumeInfo {
   series_id: string
+  load_handle: string
   shape: number[]
   spacing: number[]
   has_mask: boolean
@@ -62,12 +65,51 @@ export interface DatasetViewerSettings {
 export type ViewerSettings = Record<string, DatasetViewerSettings>
 
 export interface SliceQuery {
+  load_handle?: string
   ww?: number
   wl?: number
   layers?: number[]
   opacity_1?: number
   opacity_2?: number
   opacity_3?: number
+}
+
+export interface ReviewOperation {
+  patient_id: string
+  series_id: string
+  action: ReviewAction
+  target_phase?: PhaseDecision
+}
+
+export interface ReviewApplyPayload {
+  operations: ReviewOperation[]
+}
+
+export interface ReviewApplyResult {
+  patient_id: string
+  series_id: string
+  action: ReviewAction
+  target_phase: PhaseDecision | null
+  status: 'applied' | 'skipped' | 'failed'
+  message: string
+  moved_files: string[]
+  manifest_updated: boolean
+}
+
+export interface ReviewApplyResponse {
+  batch_id: string
+  applied_at: string
+  summary: {
+    requested: number
+    applied: number
+    skipped: number
+    failed: number
+  }
+  results: ReviewApplyResult[]
+}
+
+interface RequestOptions {
+  signal?: AbortSignal
 }
 
 type AuthPromptHandler = () => Promise<string | null>
@@ -120,16 +162,24 @@ api.interceptors.response.use(
 )
 
 export function getStoredAuthToken(): string {
-  return window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) ?? ''
+  if (USE_LOCAL_STORAGE_TOKEN) {
+    return window.localStorage.getItem(AUTH_TOKEN_STORAGE_KEY) ?? ''
+  }
+  return memoryAuthToken
 }
 
 export function setStoredAuthToken(token: string): void {
-  if (token) {
-    window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token)
+  memoryAuthToken = token
+  if (!USE_LOCAL_STORAGE_TOKEN) {
+    window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY)
     return
   }
 
-  window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY)
+  if (token) {
+    window.localStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token)
+  } else {
+    window.localStorage.removeItem(AUTH_TOKEN_STORAGE_KEY)
+  }
 }
 
 export function registerAuthPromptHandler(handler: AuthPromptHandler | null): void {
@@ -162,6 +212,10 @@ export function getApiErrorMessage(error: unknown): string {
   return 'Unexpected API error'
 }
 
+export function isHandleExpiredError(error: unknown): boolean {
+  return axios.isAxiosError(error) && error.response?.status === 410
+}
+
 async function requestAuthToken(): Promise<string | null> {
   if (!authPromptHandler) {
     return null
@@ -177,6 +231,9 @@ async function requestAuthToken(): Promise<string | null> {
 function buildSliceQuery(query: SliceQuery): string {
   const params = new URLSearchParams()
 
+  if (query.load_handle) {
+    params.set('load_handle', query.load_handle)
+  }
   if (typeof query.ww === 'number') {
     params.set('ww', String(query.ww))
   }
@@ -232,17 +289,32 @@ export const apiClient = {
     return response.data
   },
 
-  async getSliceBlob(axis: Axis, index: number, query: SliceQuery = {}): Promise<Blob> {
+  async getSliceBlob(
+    axis: Axis,
+    index: number,
+    query: SliceQuery = {},
+    options: RequestOptions = {},
+  ): Promise<Blob> {
     const response = await api.get<Blob>(`/slice/${axis}/${index}${buildSliceQuery(query)}`, {
       responseType: 'blob',
+      signal: options.signal,
     })
     return response.data
   },
 
-  async getMeshBlob(label: number, smooth = true): Promise<Blob> {
-    const params = new URLSearchParams({ smooth: String(smooth) })
+  async getMeshBlob(
+    label: number,
+    loadHandle: string,
+    smooth = true,
+    options: RequestOptions = {},
+  ): Promise<Blob> {
+    const params = new URLSearchParams({
+      load_handle: loadHandle,
+      smooth: String(smooth),
+    })
     const response = await api.get<Blob>(`/mesh/${label}?${params.toString()}`, {
       responseType: 'blob',
+      signal: options.signal,
     })
     return response.data
   },
@@ -251,8 +323,11 @@ export const apiClient = {
     return `/api/slice/${axis}/${index}${buildSliceQuery(query)}`
   },
 
-  meshUrl(label: number, smooth = true): string {
-    const params = new URLSearchParams({ smooth: String(smooth) })
+  meshUrl(label: number, loadHandle: string, smooth = true): string {
+    const params = new URLSearchParams({
+      load_handle: loadHandle,
+      smooth: String(smooth),
+    })
     return `/api/mesh/${label}?${params.toString()}`
   },
 
@@ -263,6 +338,17 @@ export const apiClient = {
 
   async putSettings(settings: ViewerSettings): Promise<ViewerSettings> {
     const response = await api.put<ViewerSettings>('/settings', settings)
+    return response.data
+  },
+
+  async applyReviewOperations(
+    datasetId: string,
+    payload: ReviewApplyPayload,
+  ): Promise<ReviewApplyResponse> {
+    const response = await api.post<ReviewApplyResponse>(
+      `/datasets/${datasetId}/review/apply`,
+      payload,
+    )
     return response.data
   },
 }

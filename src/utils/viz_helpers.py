@@ -1,203 +1,125 @@
 """Visualization helper functions for medical imaging and ML metrics."""
 
+import logging
+from dataclasses import dataclass
+from typing import List, Optional, Tuple
+
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import matplotlib.pyplot as plt
-from typing import Optional, List, Tuple
 from matplotlib.figure import Figure
-import logging
 
-# ========================== Volume Visualization ==========================
+from .classification_metrics import (
+    compute_binary_roc,
+    compute_confusion_matrix,
+    compute_multiclass_ovr_roc,
+)
+from .imaging import (
+    build_mosaic as _build_mosaic,
+    extract_tumor_boundary,
+    squeeze_volume as _squeeze_volume,
+    window_ct_pair as _window_ct_pair,
+)
+
+
+@dataclass(frozen=True)
+class _ReconstructionPanels:
+    input_mosaic: np.ndarray
+    reconstruction_mosaic: np.ndarray
+    diff_mosaic: np.ndarray
+    input_mid: np.ndarray
+    reconstruction_mid: np.ndarray
+    diff_mid: np.ndarray
+    boundary_mosaic: Optional[np.ndarray]
+    boundary_mid: Optional[np.ndarray]
 
 def create_volume_mosaic(
-    volume: torch.Tensor, 
-    grid_size: int = 6, 
-    max_slices: int = 64, 
-    center_based: bool = True
-) -> torch.Tensor:
-    """
-    Create a mosaic grid from volume slices.
-    
-    Args:
-        volume: Volume tensor [D, H, W]
-        grid_size: Number of rows/cols in the grid
-        max_slices: Maximum number of slices to display
-        center_based: If True, sample around center; else sample uniformly
-        
-    Returns:
-        Mosaic image tensor [H*grid_size, W*grid_size]
-    """
-    # assert volume.ndim == 3, f"Input volume must be 3D tensor [D, H, W], actual shape: {volume.shape}"
-    if volume.ndim == 3:
-        D, H, W = volume.shape
-    elif volume.ndim == 4 and volume.shape[0] == 1:
-        D, H, W = volume[0].shape
-        volume = volume[0]
-    elif volume.ndim == 5 and volume.shape[0] == 1 and volume.shape[1] == 1:
-        D, H, W = volume[0, 0].shape
-        volume = volume[0, 0]
-    else:
-        raise ValueError(f"Input volume must be 3D tensor [D, H, W] or 5D [1, 1, D, H, W], actual shape: {volume.shape}")
-    n_slices = min(max_slices, D)
-    total_slots = grid_size * grid_size
-    
-    # Sample slices
-    if center_based:
-        center_idx = D // 2
-        half_range = n_slices // 2
-        start_idx = max(0, center_idx - half_range)
-        end_idx = min(D, start_idx + n_slices)
-        if end_idx - start_idx < n_slices:
-            start_idx = max(0, end_idx - n_slices)
-        indices = torch.arange(start_idx, end_idx, device=volume.device)[:n_slices]
-    else:
-        indices = torch.linspace(0, D - 1, steps=n_slices, device=volume.device)
-        indices = indices.round().long().clamp(0, D - 1)
-    
-    slices = volume[indices]
-    
-    # Pad or truncate to fill grid
-    if n_slices < total_slots:
-        padding = torch.zeros(
-            total_slots - n_slices, H, W, 
-            device=volume.device, 
-            dtype=volume.dtype
+    volume: torch.Tensor,
+    grid_size: int = 6,
+    max_slices: int = 64,
+    center_based: bool = True,
+    boundary_mask: Optional[torch.Tensor] = None,
+) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    """Create a slice mosaic; returns (mosaic, boundary_mosaic|None)."""
+    volume_3d = _squeeze_volume(volume)
+    mosaic, indices = _build_mosaic(
+        volume_3d,
+        grid_size=grid_size,
+        max_slices=max_slices,
+        center_based=center_based,
+    )
+
+    if boundary_mask is None:
+        return mosaic, None
+
+    boundary_3d = _squeeze_volume(
+        torch.from_numpy(boundary_mask) if isinstance(boundary_mask, np.ndarray) else boundary_mask
+    )
+    if boundary_3d.shape != volume_3d.shape:
+        raise ValueError(
+            "Boundary mask shape must match the volume shape after squeezing. "
+            f"Got volume {tuple(volume_3d.shape)} and boundary {tuple(boundary_3d.shape)}"
         )
-        slices = torch.cat([slices, padding], dim=0)
-    elif n_slices > total_slots:
-        slices = slices[:total_slots]
-    
-    # Reshape to grid [grid_size*H, grid_size*W]
-    return slices.view(grid_size, grid_size, H, W) \
-                 .permute(0, 2, 1, 3) \
-                 .reshape(grid_size * H, grid_size * W)
+
+    boundary_mosaic, _ = _build_mosaic(
+        boundary_3d.to(volume_3d.device),
+        grid_size=grid_size,
+        max_slices=max_slices,
+        center_based=center_based,
+        indices=indices,
+    )
+
+    return mosaic, boundary_mosaic
 
 
 def create_reconstruction_figure(
     x: torch.Tensor, 
     x_hat: torch.Tensor,
-    norm_stats: Optional[dict] = None
+    norm_stats: Optional[dict] = None,
+    mask: Optional[torch.Tensor] = None,
 ) -> Figure:
-    """
-    Create volume reconstruction comparison figure.
-    
-    Args:
-        x: Input volume [D, H, W] or [1, D, H, W] (IQR-normalized)
-        x_hat: Reconstructed volume [D, H, W] or [1, D, H, W] (IQR-normalized)
-        norm_stats: Normalization statistics dict with keys: median, iqr
-                    If provided, denormalizes to HU space for visualization
-        
-    Returns:
-        Matplotlib figure with mosaics (top row) and middle slice comparison (bottom row)
-    """
-    # Handle 4D inputs by squeezing channel dimension
-    if x.ndim == 4 and x.shape[0] == 1:
-        x = x[0]
-    if x_hat.ndim == 4 and x_hat.shape[0] == 1:
-        x_hat = x_hat[0]
-    
-    # Denormalize to HU space if stats available
-    if norm_stats is not None:
-        iqr = norm_stats['iqr']
-        median = norm_stats['median']
-        x = x * iqr + median
-        x_hat = x_hat * iqr + median
-        vmin, vmax = -200, 300  # HU range
-    else:
-        # Fallback: auto-detect range from data
-        vmin = min(x.min().item(), x_hat.min().item())
-        vmax = max(x.max().item(), x_hat.max().item())
-    
-    # Create mosaics
-    x_mosaic = create_volume_mosaic(x)
-    xhat_mosaic = create_volume_mosaic(x_hat)
-    diff_mosaic = (x_mosaic - xhat_mosaic).abs()
-    
-    # Get middle slice
-    D = x.shape[0]
-    mid_idx = D // 2
-    x_mid = x[mid_idx].cpu().numpy()
-    xhat_mid = x_hat[mid_idx].cpu().numpy()
-    diff_mid = np.abs(x_mid - xhat_mid)
-    
-    # Create figure with 2 rows: mosaics (top), middle slices (bottom)
+    """Create reconstruction mosaic + mid-slice comparison figure."""
+    panels = _prepare_reconstruction_panels(x, x_hat, norm_stats, mask)
+
     fig = plt.figure(figsize=(18, 10), dpi=120, constrained_layout=True, frameon=False)
-    gs = fig.add_gridspec(2, 3, height_ratios=[2, 1])
-    
-    # Top row - Mosaics
-    ax0 = fig.add_subplot(gs[0, 0])
-    ax0.imshow(x_mosaic.cpu().numpy(), cmap="gray", vmin=vmin, vmax=vmax)
-    ax0.set_title("Input", fontsize=14, fontweight='bold')
-    ax0.axis("off")
-    
-    ax1 = fig.add_subplot(gs[0, 1])
-    ax1.imshow(xhat_mosaic.cpu().numpy(), cmap="gray", vmin=vmin, vmax=vmax)
-    ax1.set_title("Reconstruction", fontsize=14, fontweight='bold')
-    ax1.axis("off")
-    
-    ax2 = fig.add_subplot(gs[0, 2])
-    # Auto-scale difference range using 95th percentile (robust to outliers)
-    diff_vmax = torch.quantile(diff_mosaic, 0.95).item()
-    im_mosaic = ax2.imshow(diff_mosaic.cpu().numpy(), cmap="jet", vmin=0, vmax=diff_vmax)
-    ax2.set_title("Difference", fontsize=14, fontweight='bold')
+    grid = fig.add_gridspec(2, 3, height_ratios=[2, 1])
+    ax0 = fig.add_subplot(grid[0, 0])
+    ax1 = fig.add_subplot(grid[0, 1])
+    ax2 = fig.add_subplot(grid[0, 2])
+    ax3 = fig.add_subplot(grid[1, 0])
+    ax4 = fig.add_subplot(grid[1, 1])
+    ax5 = fig.add_subplot(grid[1, 2])
+
+    _draw_image_panel(ax0, panels.input_mosaic, "Input", panels.boundary_mosaic, 1.2)
+    _draw_image_panel(ax1, panels.reconstruction_mosaic, "Reconstruction", panels.boundary_mosaic, 1.2)
+
+    im_mosaic = ax2.imshow(panels.diff_mosaic, cmap="jet", vmin=0, vmax=1)
     ax2.axis("off")
     fig.colorbar(im_mosaic, ax=ax2, fraction=0.046, pad=0.04)
-    
-    # Bottom row - Middle slices
-    ax3 = fig.add_subplot(gs[1, 0])
-    ax3.imshow(x_mid, cmap="gray", vmin=vmin, vmax=vmax)
-    ax3.axis("off")
-    
-    ax4 = fig.add_subplot(gs[1, 1])
-    ax4.imshow(xhat_mid, cmap="gray", vmin=vmin, vmax=vmax)
-    ax4.axis("off")
-    
-    ax5 = fig.add_subplot(gs[1, 2])
-    # Auto-scale using 95th percentile
-    diff_mid_vmax = np.percentile(diff_mid, 95)
-    im_mid = ax5.imshow(diff_mid, cmap="jet", vmin=0, vmax=diff_mid_vmax)
+
+    _draw_image_panel(ax3, panels.input_mid, boundary=panels.boundary_mid, linewidth=1.8)
+    _draw_image_panel(ax4, panels.reconstruction_mid, boundary=panels.boundary_mid, linewidth=1.8)
+
+    im_mid = ax5.imshow(panels.diff_mid, cmap="jet", vmin=0, vmax=1)
     ax5.axis("off")
     fig.colorbar(im_mid, ax=ax5, fraction=0.046, pad=0.04)
     return fig
 
-
-# ========================== Classification Metrics ==========================
 
 def create_confusion_matrix_figure(
     y_true: np.ndarray, 
     y_pred: np.ndarray, 
     class_names: List[str]
 ) -> Figure:
-    """
-    Create confusion matrix visualization.
-    
-    Args:
-        y_true: True labels
-        y_pred: Predicted labels
-        class_names: List of class names
-        
-    Returns:
-        Matplotlib figure
-    """
-    num_classes = len(class_names)
-    
-    # Build confusion matrix
-    cm = np.zeros((num_classes, num_classes), dtype=np.int64)
-    np.add.at(cm, (y_true.astype(int), y_pred.astype(int)), 1)
-    
-    # Normalize by row
-    with np.errstate(divide='ignore', invalid='ignore'):
-        cm_norm = cm / cm.sum(axis=1, keepdims=True)
-        cm_norm = np.nan_to_num(cm_norm)
-    
-    # Create figure
+    """Create a normalized confusion matrix figure."""
+    cm, cm_norm = compute_confusion_matrix(y_true, y_pred, num_classes=len(class_names))
     fig, ax = plt.subplots(figsize=(7, 6), dpi=120, constrained_layout=True)
     im = ax.imshow(cm_norm, interpolation="nearest", cmap="Blues")
     fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    
+
     ax.set(
-        xticks=np.arange(num_classes),
-        yticks=np.arange(num_classes),
+        xticks=np.arange(len(class_names)),
+        yticks=np.arange(len(class_names)),
         xticklabels=class_names,
         yticklabels=class_names,
         ylabel="True Label",
@@ -205,103 +127,51 @@ def create_confusion_matrix_figure(
         title="Confusion Matrix (Normalized)"
     )
     plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
-    
-    # Add text annotations
-    for i in range(num_classes):
-        for j in range(num_classes):
+
+    for i in range(len(class_names)):
+        for j in range(len(class_names)):
             ax.text(
-                j, i, 
-                f"{cm[i, j]}\n({cm_norm[i, j]:.2f})", 
-                ha="center", 
-                va="center", 
+                j, i,
+                f"{cm[i, j]}\n({cm_norm[i, j]:.2f})",
+                ha="center",
+                va="center",
                 fontsize=9,
                 color="white" if cm_norm[i, j] > 0.5 else "black"
             )
-    
+
     return fig
 
 
-# ========================== ROC Curve Analysis ==========================
+def create_binary_roc_figure(y_true: np.ndarray, y_scores: np.ndarray) -> Tuple[Figure, dict]:
+    """Create ROC curve for binary classification."""
+    roc = compute_binary_roc(y_true, y_scores)
 
-def _compute_roc_curve(y_true: np.ndarray, y_score: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Compute ROC curve for binary classification."""
-    order = np.argsort(-y_score)
-    y_sorted = y_true[order].astype(np.float64)
-    scores_sorted = y_score[order]
-    
-    n_pos = y_sorted.sum()
-    n_neg = len(y_sorted) - n_pos
-    
-    if n_pos == 0 or n_neg == 0:
-        raise ValueError("Cannot compute ROC curve with only one class present")
-    
-    tp = np.cumsum(y_sorted)
-    fp = np.cumsum(1.0 - y_sorted)
-    tpr = tp / n_pos
-    fpr = fp / n_neg
-    
-    # Add origin
-    fpr = np.concatenate([[0.0], fpr])
-    tpr = np.concatenate([[0.0], tpr])
-    thresholds = np.concatenate([[np.inf], scores_sorted])
-    
-    return fpr, tpr, thresholds
+    fig, ax = plt.subplots(figsize=(6, 6), dpi=120, constrained_layout=True)
 
-
-def _compute_auc(fpr: np.ndarray, tpr: np.ndarray) -> float:
-    """Compute area under ROC curve using trapezoidal rule."""
-    return float(np.trapz(tpr, fpr))
-
-
-def _find_optimal_threshold(
-    fpr: np.ndarray, 
-    tpr: np.ndarray, 
-    thresholds: np.ndarray
-) -> Tuple[float, float, float]:
-    """Find optimal threshold using Youden's J statistic."""
-    j_scores = tpr - fpr
-    optimal_idx = int(np.argmax(j_scores))
-    return (
-        float(thresholds[optimal_idx]),
-        float(tpr[optimal_idx]),
-        float(1.0 - fpr[optimal_idx])
+    ax.plot(roc["fpr"], roc["tpr"], lw=2, label=f"AUC = {roc['auc']:.3f}")
+    ax.plot([0, 1], [0, 1], "k--", lw=1, alpha=0.5, label="Random")
+    ax.scatter(
+        [1 - roc["specificity"]],
+        [roc["sensitivity"]],
+        c="red",
+        s=50,
+        zorder=5,
+        edgecolors="black",
     )
 
-
-def create_binary_roc_figure(y_true: np.ndarray, y_scores: np.ndarray) -> Tuple[Figure, dict]:
-    """
-    Create binary classification ROC curve figure.
-    
-    Args:
-        y_true: True binary labels
-        y_scores: Prediction scores
-        
-    Returns:
-        Tuple of (figure, metrics_dict)
-    """
-    scores = y_scores.reshape(-1) if y_scores.ndim == 1 else y_scores[:, -1]
-    
-    fpr, tpr, thresholds = _compute_roc_curve(y_true, scores)
-    auc = _compute_auc(fpr, tpr)
-    threshold, sensitivity, specificity = _find_optimal_threshold(fpr, tpr, thresholds)
-    
-    # Create figure
-    fig, ax = plt.subplots(figsize=(6, 6), dpi=120, constrained_layout=True)
-    
-    ax.plot(fpr, tpr, lw=2, label=f"AUC = {auc:.3f}")
-    ax.plot([0, 1], [0, 1], "k--", lw=1, alpha=0.5, label="Random")
-    ax.scatter([1 - specificity], [sensitivity], c="red", s=50, zorder=5, edgecolors='black')
-    
-    # Optimal point annotation
     ax.annotate(
-        f"Sens: {sensitivity:.3f}\nSpec: {specificity:.3f}\nThresh: {threshold:.3f}",
-        xy=(1 - specificity, sensitivity),
+        (
+            f"Sens: {roc['sensitivity']:.3f}\n"
+            f"Spec: {roc['specificity']:.3f}\n"
+            f"Thresh: {roc['threshold']:.3f}"
+        ),
+        xy=(1 - roc["specificity"], roc["sensitivity"]),
         xytext=(0.6, 0.2),
         arrowprops=dict(arrowstyle="->", lw=1.5),
         fontsize=9,
         bbox=dict(boxstyle="round,pad=0.5", facecolor="wheat", alpha=0.8)
     )
-    
+
     ax.set(
         xlabel="False Positive Rate",
         ylabel="True Positive Rate",
@@ -311,14 +181,14 @@ def create_binary_roc_figure(y_true: np.ndarray, y_scores: np.ndarray) -> Tuple[
     )
     ax.legend(loc="lower right")
     ax.grid(True, alpha=0.3)
-    
+
     metrics = {
-        "auc": auc,
-        "sensitivity": sensitivity,
-        "specificity": specificity,
-        "threshold": threshold
+        "auc": roc["auc"],
+        "sensitivity": roc["sensitivity"],
+        "specificity": roc["specificity"],
+        "threshold": roc["threshold"],
     }
-    
+
     return fig, metrics
 
 
@@ -327,35 +197,13 @@ def create_multiclass_roc_figure(
     y_scores: np.ndarray, 
     class_names: Optional[List[str]] = None
 ) -> Tuple[Figure, float]:
-    """
-    Create multiclass One-vs-Rest ROC curves figure.
-    
-    Args:
-        y_true: True labels
-        y_scores: Prediction scores [n_samples, n_classes]
-        class_names: Optional list of class names
-        
-    Returns:
-        Tuple of (figure, macro_auc)
-    """
-    num_classes = y_scores.shape[1]
-    aucs = []
-    
+    """Create One-vs-Rest ROC curves."""
+    curves, macro_auc = compute_multiclass_ovr_roc(y_true, y_scores, class_names)
     fig, ax = plt.subplots(figsize=(7, 6), dpi=120, constrained_layout=True)
-    
-    for c in range(num_classes):
-        y_binary = (y_true == c).astype(int)
-        
-        try:
-            fpr, tpr, _ = _compute_roc_curve(y_binary, y_scores[:, c])
-            auc_c = _compute_auc(fpr, tpr)
-        except ValueError:
-            continue
-        
-        aucs.append(auc_c)
-        label = class_names[c] if class_names and c < len(class_names) else f"Class {c}"
-        ax.plot(fpr, tpr, lw=1.5, label=f"{label} (AUC={auc_c:.3f})")
-    
+
+    for curve in curves:
+        ax.plot(curve["fpr"], curve["tpr"], lw=1.5, label=f"{curve['label']} (AUC={curve['auc']:.3f})")
+
     ax.plot([0, 1], [0, 1], "k--", lw=1, alpha=0.5, label="Random")
     ax.set(
         xlabel="False Positive Rate",
@@ -366,13 +214,9 @@ def create_multiclass_roc_figure(
     )
     ax.legend(loc="lower right", fontsize=9)
     ax.grid(True, alpha=0.3)
-    
-    macro_auc = float(np.mean(aucs)) if aucs else 0.0
-    
+
     return fig, macro_auc
 
-
-# ========================== Latent Space Visualization ==========================
 
 def create_umap_figure(
     latents: List[np.ndarray],
@@ -381,29 +225,17 @@ def create_umap_figure(
     min_dist: float = 0.1,
     metric: str = "euclidean"
 ) -> Figure:
-    """
-    Create UMAP visualization of latent space.
-    
-    Args:
-        latents: List of latent vectors [B, CH, D, H, W] from batches
-        labels: Optional labels for coloring points
-        n_neighbors: UMAP n_neighbors parameter
-        min_dist: UMAP min_dist parameter
-        metric: Distance metric for UMAP
-        
-    Returns:
-        Matplotlib figure with 2D UMAP embedding
-    """
+    """Create a 2D UMAP embedding figure."""
     from umap import UMAP
 
-    # Concatenate and flatten
     all_latents = np.concatenate(latents, axis=0)
-    B = all_latents.shape[0]
-    latents_flat = all_latents.reshape(B, -1)
-    
-    logging.info(f"Running UMAP on {B} samples with {latents_flat.shape[1]} dimensions...")
-    
-    # Fit UMAP
+    num_samples = all_latents.shape[0]
+    latents_flat = all_latents.reshape(num_samples, -1)
+
+    logging.info(
+        f"Running UMAP on {num_samples} samples with {latents_flat.shape[1]} dimensions..."
+    )
+
     reducer = UMAP(
         n_neighbors=n_neighbors,
         min_dist=min_dist,
@@ -411,56 +243,107 @@ def create_umap_figure(
         metric=metric
     )
     embedding = reducer.fit_transform(latents_flat)
-    
-    # Create figure
+
     fig, ax = plt.subplots(figsize=(8, 7), dpi=150, constrained_layout=True)
-    
+
     if labels is not None:
-        labels_arr = np.concatenate(labels) if isinstance(labels, list) else np.array(labels)
+        labels_arr = np.concatenate(labels) if isinstance(labels, list) else np.asarray(labels)
         unique_classes = np.unique(labels_arr)
         n_classes = len(unique_classes)
-        
-        cmap = plt.cm.get_cmap('tab10', n_classes)
-        
+
+        cmap = plt.cm.get_cmap("jet", n_classes)
         scatter = ax.scatter(
-            embedding[:, 0],  # type: ignore 
-            embedding[:, 1],  # type: ignore 
+            embedding[:, 0],  # type: ignore
+            embedding[:, 1],  # type: ignore
             c=labels_arr,
             cmap=cmap,
             alpha=0.7,
             s=40,
-            edgecolors='black',
+            edgecolors="black",
             linewidths=0.5
         )
-        
+
         cbar = plt.colorbar(scatter, ax=ax, ticks=unique_classes)
         cbar.set_label("Class Label", rotation=90, fontsize=11)
-        
-        # Legend
+
         for class_id in unique_classes:
             ax.scatter(
-                [], [], 
+                [], [],
                 c=[cmap(int(class_id))],
                 s=80,
-                label=f'Class {int(class_id)}',
-                edgecolors='black',
+                label=f"Class {int(class_id)}",
+                edgecolors="black",
                 linewidths=0.5
             )
-        ax.legend(loc='best', framealpha=0.9, fontsize=10)
+        ax.legend(loc="best", framealpha=0.9, fontsize=10)
     else:
         ax.scatter(
-            embedding[:, 0],  # type: ignore 
-            embedding[:, 1],  # type: ignore 
+            embedding[:, 0],  # type: ignore
+            embedding[:, 1],  # type: ignore
             alpha=0.6,
             s=40,
-            c='steelblue',
-            edgecolors='black',
+            c="steelblue",
+            edgecolors="black",
             linewidths=0.5
         )
-    
+
     ax.set_xlabel("UMAP 1", fontsize=12)
     ax.set_ylabel("UMAP 2", fontsize=12)
-    ax.set_title(f"Latent Space UMAP (n={B})", fontsize=14, fontweight='bold')
-    ax.grid(True, alpha=0.3, linestyle='--')
-    
+    ax.set_title(f"Latent Space UMAP (n={num_samples})", fontsize=14, fontweight="bold")
+    ax.grid(True, alpha=0.3, linestyle="--")
+
     return fig
+
+
+def _prepare_reconstruction_panels(
+    x: torch.Tensor,
+    x_hat: torch.Tensor,
+    norm_stats: Optional[dict],
+    mask: Optional[torch.Tensor],
+) -> _ReconstructionPanels:
+    input_volume = _squeeze_volume(x)
+    reconstruction_volume = _squeeze_volume(x_hat)
+    input_volume, reconstruction_volume = _window_ct_pair(
+        input_volume, reconstruction_volume, norm_stats
+    )
+
+    input_mosaic, indices = _build_mosaic(input_volume)
+    reconstruction_mosaic, _ = _build_mosaic(reconstruction_volume, indices=indices)
+
+    boundary_mosaic = None
+    boundary_mid = None
+    if mask is not None:
+        boundary_volume = extract_tumor_boundary(mask, tumor_label=2)
+        boundary_mosaic_tensor, _ = _build_mosaic(boundary_volume, indices=indices)
+        boundary_mosaic = boundary_mosaic_tensor.cpu().numpy()
+        boundary_mid = boundary_volume[input_volume.shape[0] // 2]
+
+    mid_idx = input_volume.shape[0] // 2
+    input_mid = input_volume[mid_idx].cpu().numpy()
+    reconstruction_mid = reconstruction_volume[mid_idx].cpu().numpy()
+
+    return _ReconstructionPanels(
+        input_mosaic=input_mosaic.cpu().numpy(),
+        reconstruction_mosaic=reconstruction_mosaic.cpu().numpy(),
+        diff_mosaic=torch.abs(input_mosaic - reconstruction_mosaic).cpu().numpy(),
+        input_mid=input_mid,
+        reconstruction_mid=reconstruction_mid,
+        diff_mid=np.abs(input_mid - reconstruction_mid),
+        boundary_mosaic=boundary_mosaic,
+        boundary_mid=boundary_mid,
+    )
+
+
+def _draw_image_panel(
+    ax,
+    image: np.ndarray,
+    title: Optional[str] = None,
+    boundary: Optional[np.ndarray] = None,
+    linewidth: float = 1.2,
+) -> None:
+    ax.imshow(image, cmap="gray")
+    if boundary is not None:
+        ax.contour(boundary, levels=[0.5], colors="yellow", linewidths=linewidth)
+    ax.axis("off")
+    if title:
+        ax.set_title(title, fontsize=14, fontweight="bold")

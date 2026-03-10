@@ -11,14 +11,15 @@ import {
 } from 'three'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 
-import { apiClient, getApiErrorMessage } from '../../services/api'
+import { apiClient, getApiErrorMessage, isHandleExpiredError } from '../../services/api'
 
 interface Surface3DViewProps {
   blend: number
   errorText?: string | null
   hasMask: boolean
   labelColors: Record<number, string>
-  requestKey: string | null
+  loadHandle: string | null
+  onHandleExpired?: () => void
   visibleLabels: number[]
 }
 
@@ -79,9 +80,14 @@ function updateBlend(root: Object3D, blend: number): void {
   })
 }
 
-async function loadMesh(label: number, color: string, blend: number): Promise<MeshEntry | null> {
+async function loadMesh(
+  label: number,
+  color: string,
+  blend: number,
+  loadHandle: string,
+): Promise<MeshEntry | null> {
   try {
-    const blob = await apiClient.getMeshBlob(label)
+    const blob = await apiClient.getMeshBlob(label, loadHandle)
     const objectUrl = URL.createObjectURL(blob)
     try {
       const loader = new GLTFLoader()
@@ -105,7 +111,8 @@ function Surface3DView({
   errorText,
   hasMask,
   labelColors,
-  requestKey,
+  loadHandle,
+  onHandleExpired,
   visibleLabels,
 }: Surface3DViewProps) {
   const [requestState, setRequestState] = useState<{
@@ -122,7 +129,7 @@ function Surface3DView({
 
   const sortedVisibleLabels = [...visibleLabels].sort((left, right) => left - right)
   const visibleKey = sortedVisibleLabels.join(',')
-  const seriesKey = requestKey && hasMask ? requestKey : null
+  const seriesKey = loadHandle && hasMask ? loadHandle : null
   const fetchKey = seriesKey && visibleKey ? `${seriesKey}::${visibleKey}` : null
 
   useEffect(() => {
@@ -139,7 +146,7 @@ function Surface3DView({
     Promise.all(
       labelsToLoad.map((label) => {
         const color = labelColors[label] ?? '#f5f5f5'
-        return loadMesh(label, color, 1)
+        return loadMesh(label, color, 1, seriesKey)
       }),
     )
       .then((entries) => {
@@ -167,6 +174,10 @@ function Surface3DView({
         if (!active) {
           return
         }
+        if (isHandleExpiredError(requestError)) {
+          onHandleExpired?.()
+          return
+        }
         setRequestState((current) => ({
           error: getApiErrorMessage(requestError),
           key: fetchKey,
@@ -178,7 +189,7 @@ function Surface3DView({
     return () => {
       active = false
     }
-  }, [fetchKey, labelColors, seriesKey, visibleKey])
+  }, [fetchKey, labelColors, onHandleExpired, seriesKey, visibleKey])
 
   useEffect(() => {
     requestState.meshes.forEach((entry) => updateBlend(entry.object, blend))
@@ -205,7 +216,7 @@ function Surface3DView({
     )
   }
 
-  if (!requestKey) {
+  if (!loadHandle) {
     return (
       <SurfacePanelMessage
         title="Select a series"
@@ -238,6 +249,7 @@ function Surface3DView({
   const loadedLabels = renderedMeshes.map((entry) => entry.label).join(',')
   const isLoading = Boolean(fetchKey) && requestState.key !== fetchKey
   const loadError = requestState.key === fetchKey ? requestState.error : null
+  const hasBlockingLoadError = Boolean(loadError) && renderedMeshes.length === 0
 
   return (
     <Box
@@ -249,6 +261,7 @@ function Surface3DView({
         position: 'relative',
         flex: 1,
         minHeight: 0,
+        minWidth: 0,
         borderRadius: 3,
         overflow: 'hidden',
         border: '1px solid',
@@ -256,7 +269,7 @@ function Surface3DView({
         backgroundColor: '#050505',
       }}
     >
-      {loadError && renderedMeshes.length === 0 ? (
+      {hasBlockingLoadError ? (
         <Alert severity="error" sx={{ m: 2 }}>
           {loadError}
         </Alert>
@@ -283,6 +296,26 @@ function Surface3DView({
           <OrbitControls enableDamping dampingFactor={0.09} />
         </Canvas>
       )}
+
+      {!hasBlockingLoadError && loadError ? (
+        <Alert
+          severity="warning"
+          sx={{
+            position: 'absolute',
+            left: 12,
+            right: 12,
+            top: 12,
+            py: 0.1,
+            '& .MuiAlert-message': {
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            },
+          }}
+        >
+          Surface refresh failed. Showing previous mesh.
+        </Alert>
+      ) : null}
 
       {isLoading ? (
         <Stack

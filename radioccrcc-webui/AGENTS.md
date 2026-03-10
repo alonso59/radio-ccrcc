@@ -44,6 +44,9 @@ udocker pull node:20-slim
 udocker create --name=radio-node node:20-slim
 ```
 
+### SKILLS
+You have skills defined in radioccrcc-webui/.codex/skills as base to get best practices to development.
+
 ### Hard constraints for the agent
 - ❌ Never use `sudo`, `apt`, `brew`, or system-level installs
 - ❌ Never suggest native `npm` or `node` commands outside udocker
@@ -467,14 +470,14 @@ Layer toggles sync between 2D overlay and 3D meshes. Empty state handled.
 
 **Tasks**:
 
-- [ ] **M10.1** Create `useSettings.ts` hook:
+- [x] **M10.1** Create `useSettings.ts` hook:
   - On viewer mount: fetch `GET /api/settings`, apply saved W/L, layers, last patient
   - On change: debounced `PUT /api/settings` (500ms delay)
-- [ ] **M10.2** On `DatasetSelectorPage` load: if settings contain `last_patient`
+- [x] **M10.2** On `DatasetSelectorPage` load: if settings contain `last_patient`
   for the selected dataset, offer "Resume" button.
-- [ ] **M10.3** Persist: W/L values, layer visibility, layer opacity, last patient ID,
+- [x] **M10.3** Persist: W/L values, layer visibility, layer opacity, last patient ID,
   last series ID.
-- [ ] **M10.4** Verification:
+- [x] **M10.4** Verification:
   - Change W/L, refresh browser → values restored
   - Navigate to patient, refresh → same patient loads
 
@@ -489,15 +492,15 @@ and server restart.
 
 **Tasks**:
 
-- [ ] **M11.1** Test full flow: select dataset → patient → series → navigate → overlay → 3D → expand → restore
-- [ ] **M11.2** Test VOI-only dataset (create or use Dataset820/voi/)
-- [ ] **M11.3** Test NIfTI-only dataset (no seg/, no voi/)
-- [ ] **M11.4** Test dataset without manifest.csv (filename-based discovery)
-- [ ] **M11.5** Test auth flow: set token → verify 401 → login → session works
-- [ ] **M11.6** Fix: responsiveness of 2×2 grid on different screen sizes
-- [ ] **M11.7** Fix: loading indicators during slice fetch and mesh generation
-- [ ] **M11.8** Fix: error messages for missing/corrupt files (graceful fallback)
-- [ ] **M11.9** Performance: ensure slice navigation < 200ms, first render < 3s
+- [x] **M11.1** Test full flow: select dataset → patient → series → navigate → overlay → 3D → expand → restore
+- [x] **M11.2** Test VOI-only dataset (create or use Dataset820/voi/)
+- [x] **M11.3** Test NIfTI-only dataset (no seg/, no voi/)
+- [x] **M11.4** Test dataset without manifest.csv (filename-based discovery)
+- [x] **M11.5** Test auth flow: set token → verify 401 → login → session works
+- [x] **M11.6** Fix: responsiveness of 2×2 grid on different screen sizes
+- [x] **M11.7** Fix: loading indicators during slice fetch and mesh generation
+- [x] **M11.8** Fix: error messages for missing/corrupt files (graceful fallback)
+- [x] **M11.9** Performance: ensure slice navigation < 200ms, first render < 3s
 
 **Completion criteria**: All acceptance criteria from SRS §10 pass.
 
@@ -509,11 +512,11 @@ and server restart.
 
 **Tasks**:
 
-- [ ] **M12.1** Create `Dockerfile`:
+- [x] **M12.1** Create `Dockerfile`:
   - Multi-stage: build frontend → copy into Python image
   - FastAPI serves static files from `/app/static`
   - `CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]`
-- [ ] **M12.2** Create `.dockerignore` (exclude `node_modules`, `__pycache__`, `.git`, data)
+- [x] **M12.2** Create `.dockerignore` (exclude `node_modules`, `__pycache__`, `.git`, data)
 - [ ] **M12.3** Build and test with podman/docker:
   - `podman build -t radiology-ui:1.0 .`
   - `podman run -p 8000:8000 -v /path/to/data/dataset:/data:ro radiology-ui:1.0`
@@ -524,10 +527,50 @@ and server restart.
   - `udocker create --name=radio-ui radiology-ui:1.0`
   - `udocker run -p 8000:8000 -v /path/to/data:/data:ro radio-ui`
 - [ ] **M12.5** Verify image size ≤ 1.5 GB.
-- [ ] **M12.6** Update README with final deployment instructions.
+- [x] **M12.6** Update README with final deployment instructions.
 
 **Completion criteria**: App runs from udocker with single load+create+run
 sequence. All features work through the container. Image size within budget.
+
+---
+
+### Milestone 13 — Reviewer Decisions Workflow
+
+**Goal**: Add viewer-side reviewer actions with controlled dataset mutations and
+auditable decision logs.
+
+**Tasks**:
+
+- [x] **M13.1** Update `docs/SRS.md` for v1.0 reviewer workflow:
+  - Viewer patient selector + group filter + next-patient navigation
+  - Phase decision (`NC`/`ART`/`VEN`) + delete action + staged apply flow
+  - Mutation gate (`ALLOW_DATA_MUTATIONS`) and recycle/log artifacts
+- [x] **M13.2** Add backend review contracts:
+  - `backend/app/models/review.py`
+  - `POST /api/datasets/{dataset_id}/review/apply`
+  - per-operation status (`applied`/`skipped`/`failed`) + batch summary
+- [x] **M13.3** Add backend review service:
+  - dataset-level locking
+  - action/phase validation
+  - safe path handling + atomic file writes
+  - NIfTI reclassify manifest update, VOI reclassify move, recycle delete moves
+  - `decisions.json`, `reclassification_log.json`, `deletion_log.json` append behavior
+- [x] **M13.4** Extend viewer UI in `ViewerPage`:
+  - patient dropdown + dynamic group dropdown (`All` + discovered groups)
+  - `Load Next Patient` within filtered/sorted order
+  - phase selector + queue reclassify/delete + clear + apply confirmation
+- [x] **M13.5** Extend frontend API client for review apply request/response types.
+- [x] **M13.6** Update runtime/docs:
+  - `.env.example` includes `ALLOW_DATA_MUTATIONS`
+  - `docker-compose.yml` uses writable dataset mount and mutation env passthrough
+  - README documents controlled-write behavior, recycle/log paths, and backup guidance
+- [x] **M13.7** Verify:
+  - backend review apply path via Python smoke test (gate, reclassify, delete, logs)
+  - frontend production build succeeds in udocker (`make build-frontend`)
+
+**Completion criteria**: Viewer can stage and apply review decisions for the
+active patient. Backend enforces `ALLOW_DATA_MUTATIONS` and writes auditable
+decision artifacts while preserving non-destructive recycle semantics.
 
 ---
 
@@ -587,6 +630,7 @@ sequence. All features work through the container. Image size within budget.
 | M7        | Frontend: 2×2 Viewer Layout        | ✅ Completed    | 2026-03-04 |
 | M8        | Frontend: 2D Slice Viewers         | ✅ Completed    |       |
 | M9        | Frontend: 3D Surface Panel         | ✅ Completed    |       |
-| M10       | Frontend: Settings Persistence     | ⬜ Not started  |       |
-| M11       | Integration Testing & Polish       | ⬜ Not started  |       |
-| M12       | Containerization & Deployment      | ⬜ Not started  | Dockerfile created here only |
+| M10       | Frontend: Settings Persistence     | ✅ Completed    | 2026-03-05 |
+| M11       | Integration Testing & Polish       | ✅ Completed    | 2026-03-05 |
+| M12       | Containerization & Deployment      | 🟨 Blocked      | `podman`/`docker` missing on host; M12.3–M12.5 pending |
+| M13       | Reviewer Decisions Workflow        | ✅ Completed    | 2026-03-05 |

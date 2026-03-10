@@ -20,11 +20,11 @@ hydra:
         filename: ${hydra.runtime.output_dir}/Training_log_${now:%Y-%m-%d_%H-%M-%S}.log
 
 dataset:
-  dataset_id: Dataset320         # Dataset ID (e.g., Dataset220, Dataset320, Dataset420)
+  dataset_id: Dataset820         # Dataset ID (e.g., Dataset220, Dataset320, Dataset420)
   dataset_type: images           # Options: images | segmentation
   base_path: data/dataset        # Base path to dataset folder
   fold: 0
-  batch_size: 32
+  batch_size: 16
   num_workers: 12
   augment: true
   image_key: ct
@@ -50,10 +50,12 @@ trainer:
   use_amp: true                 # if you want AMP for speed
   log_image_every_n_steps: 200  # optional step-wise preview
   monitor_metric: val_loss          # Metric to monitor for best model
-  
-  # TensorBoard organization
-  # By default: creates outputs/YYYY-MM-DD/HH-MM-SS/ with ONE event file containing all metrics
   experiment_name: null         # Optional: descriptive name for this run (logged as metadata)
+  probe_interval: 10        # cada N épocas
+  probe_max_batches: 100     # cuántos batches para extraer embeddings (barato)
+  probe_epochs: 10          # epochs del clasificador lineal
+  probe_lr: 1e-2
+  probe_l2: 1e-4
 
 scheduler:
   name: CosineAnnealingLR
@@ -66,20 +68,22 @@ loss:
   lpips_min_step: 1
 
 optimizer:
-  name: AdamW
+  name: Adam
   lr: 1e-3
-  lr_g: 5e-5
+  lr_g: 1e-3
   lr_d: 1e-4    
   lr_unet: 0.0001
-  betas: [0.9, 0.999] 
+  betas_g: [0.9, 0.999]
+  betas_d: [0.0, 0.999]
   weight_decay: 0.0
 
 loss_weights:
   recon: 1.0
-  perceptual: 0.25
-  adversarial: 0.05
-  feature_matching: 0.0
-  kl: 0.1
+  perceptual: 0.05
+  adversarial: 0.1
+  kl: 5e-6
+
+adversarial_warmup_epochs: 500
 
 gan:
   type: hinge_sn # hinge_sn, wgan-gp

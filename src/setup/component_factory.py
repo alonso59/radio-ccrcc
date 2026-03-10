@@ -24,8 +24,9 @@ class ComponentFactory:
         if show_summary:
             summary(
                 model, 
-                input_size=(1, 1, 128, 128, 128),
-                col_names=["input_size", "output_size", "num_params", "trainable"]
+                input_size=(1, 1, 96, 96, 64),
+                col_names=["input_size", "output_size", "num_params", "trainable"],
+                depth=4
             )
         return model
     

@@ -1,14 +1,9 @@
-"""
-Trainer Factory - Factory Pattern for creating trainers.
-Follows the Factory design pattern and Dependency Inversion Principle.
-"""
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 from omegaconf import DictConfig
 import torch
 
 from .base_trainer import BaseTrainer
-from .autoencoder_trainer import AutoencoderTrainer
-from .adversarial_autoencoder_trainer import AdversarialAutoencoderTrainer
+from .trainer import AutoencoderTrainer
 from .classifier_trainer import ClassifierTrainer
 import logging
 
@@ -20,7 +15,6 @@ class TrainerFactory:
     
     TRAINER_REGISTRY = {
         "vae": AutoencoderTrainer,
-        "gan": AdversarialAutoencoderTrainer,
         "classifier": ClassifierTrainer,
     }
     
@@ -73,10 +67,7 @@ class TrainerFactory:
         # Mode-specific trainer creation
         if training_mode in ["autoencoder", "vae"]:
             return cls._create_autoencoder_trainer(common_args, kwargs)
-        
-        elif training_mode in ["adversarial", "gan"]:
-            return cls._create_adversarial_trainer(common_args, kwargs)
-        
+
         elif training_mode == "classifier":
             return cls._create_classifier_trainer(common_args, kwargs)
         
@@ -94,21 +85,6 @@ class TrainerFactory:
         
         return AutoencoderTrainer(
             model=kwargs["model"],
-            **common_args
-        )
-    
-    @staticmethod
-    def _create_adversarial_trainer(
-        common_args: Dict[str, Any],
-        kwargs: Dict[str, Any]
-    ) -> AdversarialAutoencoderTrainer:
-        """Create adversarial autoencoder trainer."""
-        if "model" not in kwargs:
-            raise ValueError("'model' must be provided for adversarial training")
-        
-        return AdversarialAutoencoderTrainer(
-            model=kwargs["model"],
-            metrics=kwargs.get("metrics", None),
             **common_args
         )
     

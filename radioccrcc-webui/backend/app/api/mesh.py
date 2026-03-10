@@ -11,16 +11,23 @@ router = APIRouter(tags=["mesh"])
 
 def _http_error(exc: Exception) -> HTTPException:
     if isinstance(exc, RuntimeError):
-        return HTTPException(status_code=409, detail=str(exc))
+        message = str(exc)
+        if "load handle" in message.lower():
+            return HTTPException(status_code=410, detail=message)
+        return HTTPException(status_code=409, detail=message)
     if isinstance(exc, ValueError):
         return HTTPException(status_code=400, detail=str(exc))
     return HTTPException(status_code=500, detail="Unexpected mesh error")
 
 
 @router.get("/api/mesh/{label}")
-def mesh_glb(label: int, smooth: bool = Query(default=True)):
+def mesh_glb(
+    label: int,
+    load_handle: str = Query(...),
+    smooth: bool = Query(default=True),
+):
     try:
-        _volume, mask, spacing = volume_cache.get_current()
+        _volume, mask, spacing = volume_cache.get_by_handle(load_handle)
         glb_bytes = generate_mesh(mask=mask, label=label, spacing=spacing, smooth=smooth)
     except Exception as exc:
         raise _http_error(exc) from exc

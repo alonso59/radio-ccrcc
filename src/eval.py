@@ -9,15 +9,17 @@ import torch
 import logging
 from omegaconf import OmegaConf
 from pathlib import Path
+from typing import Optional
 
 # Import evaluation components
-from src.evaluation import ModelEvaluator
-from src.evaluation.test_loader import TestLoaderFactory
+from evaluation import ModelEvaluator
+from evaluation.test_loader import TestLoaderFactory
 
 # Import training components
-from src.trainers.loss import ELBOLoss
-from src.dataloader.dataloader import DataLoaderFactory
-from src.models.autoencoder import Autoencoder
+from torch.nn import L1Loss
+from monai.losses.perceptual import PerceptualLoss
+from dataloader.dataloader import DataLoaderFactory
+from models.autoencoder import Autoencoder
 
 # Setup logging
 logging.basicConfig(
@@ -159,20 +161,42 @@ def evaluate_single_fold(
 	# Create train and val loaders
 	train_loader, val_loader, normalization_stats = DataLoaderFactory.create_loaders(cfg.dataset)
 	
-	# Initialize criterion and evaluator
-	criterion = ELBOLoss()
-	evaluator = ModelEvaluator(device=device, criterion=criterion)
+	# Initialize criteria and evaluator (matching trainer.py)
+	l1_loss = L1Loss()
+	perceptual_loss = PerceptualLoss(spatial_dims=3, network_type="squeeze", is_fake_3d=True, fake_3d_ratio=0.2)
+	perceptual_loss.to(device)
+	evaluator = ModelEvaluator(
+		device=device,
+		l1_loss=l1_loss,
+		perceptual_loss=perceptual_loss,
+		normalization_stats=normalization_stats
+	)
 	
 	# Prepare test loader if requested
 	test_loader = None
 	if evaluate_test:
 		logger.info("Creating test loader (lazy loading)...")
-		from src.dataloader.augmentations import val_augmentations
+		from dataloader.augmentations import val_augmentations
+		from hydra.utils import to_absolute_path
 
-		val_transform = val_augmentations(normalization_stats)
+		# Construct splits_path same way as DataLoaderFactory
+		dataset_id = cfg.dataset.dataset_id
+		base_path = cfg.dataset.get('base_path', 'data/dataset')
+		base_path = base_path if os.path.isabs(base_path) else to_absolute_path(base_path)
+		splits_path = os.path.join(base_path, dataset_id, 'voi', 'splits_final.json')
+		
+		# Convert normalization_stats dict to tuple for val_augmentations
+		data_stats = (
+			normalization_stats['mean'],
+			normalization_stats['std'],
+			normalization_stats['median'],
+			normalization_stats['p25'],
+			normalization_stats['p75']
+		)
+		val_transform = val_augmentations(data_stats)
 		
 		test_loader, num_test = TestLoaderFactory.create_test_loader(
-			splits_path=cfg.dataset.splits_path,
+			splits_path=splits_path,
 			val_transform=val_transform,
 			batch_size=test_batch_size,
 			num_workers=0  # Low workers to save memory
@@ -186,7 +210,8 @@ def evaluate_single_fold(
 		val_loader=val_loader,
 		test_loader=test_loader,
 		fold_id=fold_id,
-		beta=cfg.loss_weights.kl
+		kl_weight=cfg.loss_weights.kl,
+		perceptual_weight=cfg.loss_weights.perceptual
 	)
 	
 	# Clean up
@@ -211,9 +236,9 @@ def main():
 		  results/Dataset420_ldm_gan
 	"""
 	# Configuration
-	results_dir = "results/Dataset320_ldm_vae"  # Update to your experiment path
+	results_dir = "results/Dataset620_ldm_vae"  # Update to your experiment path
 	evaluate_test_set = True  # Set to True to evaluate test set per fold
-	test_batch_size = 16  # Smaller batch size for test to save memory
+	test_batch_size = 1  # Must be 1 for variable-sized test volumes
 	
 	# Device setup
 	device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -254,8 +279,19 @@ def main():
 	logger.info("AGGREGATING RESULTS")
 	logger.info("="*80)
 	
-	evaluator = ModelEvaluator(device=device, criterion=ELBOLoss())
-	summary = evaluator.aggregate_folds(fold_results)
+	# Create a simple evaluator instance for aggregation (no need for losses)
+	from torch.nn import L1Loss
+	from monai.losses.perceptual import PerceptualLoss
+	
+	dummy_l1 = L1Loss()
+	dummy_perceptual = PerceptualLoss(spatial_dims=3, network_type="squeeze", is_fake_3d=True, fake_3d_ratio=0.2)
+	aggregator = ModelEvaluator(
+		device=device,
+		l1_loss=dummy_l1,
+		perceptual_loss=dummy_perceptual,
+		normalization_stats={}
+	)
+	summary = aggregator.aggregate_folds(fold_results)
 	
 	# Print summary
 	logger.info("\n" + "="*80)

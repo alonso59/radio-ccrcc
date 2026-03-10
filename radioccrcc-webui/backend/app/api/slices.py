@@ -16,7 +16,10 @@ def _http_error(exc: Exception) -> HTTPException:
     if isinstance(exc, FileNotFoundError):
         return HTTPException(status_code=404, detail=str(exc))
     if isinstance(exc, RuntimeError):
-        return HTTPException(status_code=409, detail=str(exc))
+        message = str(exc)
+        if "load handle" in message.lower():
+            return HTTPException(status_code=410, detail=message)
+        return HTTPException(status_code=409, detail=message)
     if isinstance(exc, (IndexError, ValueError)):
         return HTTPException(status_code=400, detail=str(exc))
     return HTTPException(status_code=500, detail="Unexpected slice error")
@@ -53,12 +56,13 @@ def slice_png(
     axis: str,
     index: int,
     request: Request,
+    load_handle: str = Query(...),
     ww: float = Query(default=400.0),
     wl: float = Query(default=50.0),
     layers: str | None = Query(default="1,2"),
 ):
     try:
-        volume, mask, _spacing = volume_cache.get_current()
+        volume, mask, _spacing = volume_cache.get_by_handle(load_handle)
         visible_layers = _parse_layers(layers)
         layer_config = deepcopy(DEFAULT_LAYER_CONFIG)
         for label, config in layer_config.items():

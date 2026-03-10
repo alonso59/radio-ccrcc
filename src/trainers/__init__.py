@@ -7,8 +7,7 @@ Provides unified training infrastructure following SOLID principles.
 from .base_trainer import BaseTrainer
 
 # Concrete trainers
-from .autoencoder_trainer import AutoencoderTrainer
-from .adversarial_autoencoder_trainer import AdversarialAutoencoderTrainer
+from .trainer import AutoencoderTrainer
 from .classifier_trainer import ClassifierTrainer
 
 # Factory
@@ -22,7 +21,6 @@ from .trainer_factory import TrainerFactory
 __all__ = [
     'BaseTrainer',
     'AutoencoderTrainer',
-    'AdversarialAutoencoderTrainer',
     'ClassifierTrainer',
     'TrainerFactory',
 ]

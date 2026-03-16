@@ -53,7 +53,7 @@ class AutoencoderTrainer(BaseTrainer):
             minimum_size_im=64  # Match minimum dimension of input (96,96,64)
         )
         self.discriminator.to(device)
-
+        self.adv_running = False
         # Cached config
         self.use_masked_loss = getattr(self.cfg.trainer, 'use_masked_loss', False)
         self.kl_w = self.cfg.loss_weights.kl
@@ -102,7 +102,6 @@ class AutoencoderTrainer(BaseTrainer):
         """Set model to train or eval mode."""
         self.model.train(train)
     
-    
     def kl_loss(self, z_mu, z_sigma):
         klloss = 0.5 * torch.sum(z_mu.pow(2) + z_sigma.pow(2) - torch.log(z_sigma.pow(2)) - 1, dim=[1, 2, 3, 4])
         return torch.sum(klloss) / klloss.shape[0]
@@ -124,23 +123,34 @@ class AutoencoderTrainer(BaseTrainer):
         for p in self.discriminator.parameters():
             p.requires_grad_(requires_grad)
 
+    def masked_mean(self, x, mask, eps=1e-6):
+        mask = mask.float()
+        return (x * mask).sum() / mask.sum().clamp_min(eps)
+
     def _compute_recon_losses(
         self,
-        inputs: torch.Tensor,
-        reconstruction: torch.Tensor,
-        tumor_mask: torch.Tensor,
-        weight_k: float = 1.0,
-        weight_tr: float = 10.0
-        ):
-        if self.use_masked_loss:
-            l1_per_pixel = torch.abs(reconstruction.float() - inputs.float())
-            weights = torch.full_like(tumor_mask, weight_k, dtype=torch.float32).to(inputs.device)
-            weights[tumor_mask == 1] = weight_tr
-            weighted_l1_tensor = l1_per_pixel * weights
-            recons_loss = torch.mean(weighted_l1_tensor)
-        else:
-            recons_loss = self.l1_loss(reconstruction.float(), inputs.float())
-        p_loss = self.loss_perceptual(reconstruction.float(), inputs.float())
+        inputs,
+        reconstruction,
+        tumor_mask,
+        kidney_mask=None,
+        wt=1.0,
+        wk=0.5,
+    ):
+        l1 = torch.abs(reconstruction.float() - inputs.float())
+
+        tumor_mask = tumor_mask.float()
+
+        if kidney_mask is None:
+            kidney_mask = torch.zeros_like(tumor_mask)
+        kidney_mask = kidney_mask.float() * (1.0 - tumor_mask)
+
+        l_t = self.masked_mean(l1, tumor_mask)
+        l_k = self.masked_mean(l1, kidney_mask)
+
+        recons_loss = wt * l_t + wk * l_k 
+        
+        p_loss = self.loss_perceptual(reconstruction.float(),inputs.float())
+
         return recons_loss, p_loss
 
     def _forward_and_losses(
@@ -260,7 +270,16 @@ class AutoencoderTrainer(BaseTrainer):
                 preds = torch.argmax(logits, dim=1).cpu()
                 acc = (preds == Yval.long()).float().mean().item()
                 return {"probe_acc": acc}
-
+    
+    # def _update_optim_betas_adv(self) -> None:
+    #     # Example: switch to more stable betas for adversarial training
+    #     new_betas_g = (0.5, 0.999)
+    #     new_betas_d = (0.0, 0.99)
+    #     for param_group in self.optimizer_g.param_groups:
+    #         param_group['betas'] = new_betas_g
+    #     for param_group in self.optimizer_d.param_groups:
+    #         param_group['betas'] = new_betas_d
+            
     def train_step(self, epoch, batch: Any) -> Dict[str, float]:
         inputs = batch["ct"]["data"].to(self.device)
         phase = batch["phase"].to(self.device)
@@ -271,13 +290,9 @@ class AutoencoderTrainer(BaseTrainer):
         assert inputs.shape == tumor_mask.shape, \
             f"CT and tumor mask patch shape mismatch: {inputs.shape} vs {tumor_mask.shape}"
         
-        if epoch == self.adv_warmup_epochs :
-            OptimClass = getattr(optim, self.cfg.optimizer.name)
-            self.optimizer_g = OptimClass(params=self.model.parameters(), 
-                                      lr=self.cfg.optimizer.lr_g, 
-                                      betas=[0.0, 0.999],
-                                      weight_decay=getattr(self.cfg.optimizer, 'weight_decay', 0.0))
-
+        if epoch == self.adv_warmup_epochs:
+            self.adv_running = True
+            # self._update_optim_betas_adv()
         self.optimizer_g.zero_grad(set_to_none=True)
 
         reconstruction, z_mu, z_sigma, recons_loss, p_loss, klloss, loss_g = self._forward_and_losses(inputs, tumor_mask, phase=phase)
@@ -306,7 +321,7 @@ class AutoencoderTrainer(BaseTrainer):
             "loss": loss_g.item(),
             "loss_d": loss_d.item(),
             "recon": recons_loss.item(),
-            "kl": klloss.item() * self.kl_w,
+            "kl": klloss.item(),
             "perceptual": p_loss.item(),
             "g_adv": gen_adv.item(),
         }
@@ -336,7 +351,7 @@ class AutoencoderTrainer(BaseTrainer):
                 "loss": loss_g.item(),
                 "loss_d": loss_d.item(),
                 "recon": recons_loss.item(),
-                "kl": klloss.item() * self.kl_w,
+                "kl": klloss.item(),
                 "perceptual": p_loss.item(),
                 "g_adv": gen_adv.item(),
             }
@@ -369,11 +384,14 @@ class AutoencoderTrainer(BaseTrainer):
             averaged_metrics['PSNR'] = epoch_metrics['PSNR'] / epoch_metrics['PSNR_count']
         return averaged_metrics
 
-    def step_schedulers(self) -> None:
+    def step_schedulers(self, epoch: int) -> None:
         """Step LR schedulers for G and D (epoch-based)."""
         self.scheduler_g.step()
-        self.scheduler_d.step()
-    
+        self.logger.add_scalar("LR/generator", self.optimizer_g.param_groups[0]["lr"], epoch)
+        if self.adv_running:
+            self.scheduler_d.step()
+            self.logger.add_scalar("LR/discriminator", self.optimizer_d.param_groups[0]["lr"], epoch)
+
     def on_fit_start(self) -> None:
         """Hook called before training starts."""
         super().on_fit_start()

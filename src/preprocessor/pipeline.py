@@ -626,7 +626,8 @@ def run(cfg: Dict) -> Dict:
     file_list = discover_files(
         image_folder, mask_folder,
         cfg["IMAGE_SUFFIX"], cfg["MASK_SUFFIX"],
-        cfg.get("PATIENT_ID_PATTERN"),
+        manifest_output_dir=dataset_dir,
+        patient_id_pattern=cfg.get("PATIENT_ID_PATTERN"),
     )
     print(f"       → {len(file_list)} image-mask pairs")
 

@@ -20,7 +20,7 @@ hydra:
         filename: ${hydra.runtime.output_dir}/Training_log_${now:%Y-%m-%d_%H-%M-%S}.log
 
 dataset:
-  dataset_id: Dataset820         # Dataset ID (e.g., Dataset220, Dataset320, Dataset420)
+  dataset_id: Dataset320         # Dataset ID (e.g., Dataset220, Dataset320, Dataset420)
   dataset_type: images           # Options: images | segmentation
   base_path: data/dataset        # Base path to dataset folder
   fold: 0
@@ -43,7 +43,7 @@ ldm:
 
 trainer:
   training_mode: vae    # Options: vae, gan, classifier
-  max_epochs: 1000
+  max_epochs: 200
   checkpoint_dir: checkpoints/
   device: cuda
   use_dataparallel: true        # Use DataParallel for multi-GPU training
@@ -59,7 +59,7 @@ trainer:
 
 scheduler:
   name: CosineAnnealingLR
-  T_max: 1000
+  T_max: 200
   eta_min: 1e-6
 
 loss:
@@ -71,19 +71,19 @@ optimizer:
   name: Adam
   lr: 1e-3
   lr_g: 1e-3
-  lr_d: 1e-4    
+  lr_d: 1e-4
   lr_unet: 0.0001
-  betas_g: [0.9, 0.999]
-  betas_d: [0.0, 0.999]
+  betas_g: [0.5, 0.999]
+  betas_d: [0.0, 0.99]
   weight_decay: 0.0
 
 loss_weights:
   recon: 1.0
-  perceptual: 0.05
-  adversarial: 0.1
-  kl: 5e-6
+  perceptual: 0.5
+  adversarial: 0.001
+  kl: 1e-4  
 
-adversarial_warmup_epochs: 500
+adversarial_warmup_epochs: 50
 
 gan:
   type: hinge_sn # hinge_sn, wgan-gp

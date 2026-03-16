@@ -266,7 +266,7 @@ class ClassifierTrainer(BaseTrainer):
         # Call parent to print only scalar metrics
         super()._print_epoch_summary(epoch, scalar_train, scalar_val, epoch_time)
     
-    def step_schedulers(self) -> None:
+    def step_schedulers(self, epoch: int) -> None:
         """Step the learning rate scheduler."""
         if self.scheduler is not None:
             self.scheduler.step()

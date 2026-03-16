@@ -206,11 +206,23 @@ class DataLoaderFactory:
         max_queue_length = data_cfg.get('max_queue_length', 200) 
         num_workers = data_cfg.get('num_workers', 8)
         sampler_config = AdaptiveSamplerConfig(
-            min_tumor_voxels=data_cfg.get('min_tumor_voxels', 20),      # Quality threshold
-            voxels_per_patch=data_cfg.get('voxels_per_patch', 300),     # Adaptive scaling
-            max_patches_cap=data_cfg.get('max_patches_cap', 8),        # Upper limit
-            tumor_label=2,                                              # Tumor class in mask
-        )
+                            min_tumor_voxels=50,
+                            voxels_per_patch=300,
+                            max_patches_cap=8,
+                            tumor_label=2,
+                            top_pool_factor=1,
+                            weighted_pool_sampling=True,
+                            ring_dilate_vox=1,
+                            ring_weight=0.1,
+                            kidney_label=1,
+                            kidney_weight=0.05,
+                            border_weight=0.2,
+                            selection_pool_factor=4,
+                            diversity_weight=0.35,
+                            iou_redundancy_weight=0.65,
+                            distance_redundancy_weight=0.35,
+                            audit_enabled=True,
+                        )
         
         logger.info(
             "[DATALOADER] Sampler: patch=%s overlap=%s min_voxels=%s voxels_per_patch=%s max_cap=%s samples=%s queue=%s workers=%s",

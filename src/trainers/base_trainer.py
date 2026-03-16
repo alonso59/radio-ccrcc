@@ -121,7 +121,7 @@ class BaseTrainer(ABC):
             self.on_epoch_end(epoch, train_metrics, val_metrics)
             
             # Scheduler step
-            self.step_schedulers()
+            self.step_schedulers(epoch)
             
             # Print summary
             self._print_epoch_summary(epoch, train_metrics, val_metrics, time.time() - start_time)
@@ -196,7 +196,7 @@ class BaseTrainer(ABC):
         """Set models to train or eval mode."""
         pass
     
-    def step_schedulers(self) -> None:
+    def step_schedulers(self, epoch: int) -> None:
         """Step learning rate schedulers. Override if needed."""
         pass
     

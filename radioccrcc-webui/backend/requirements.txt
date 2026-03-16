@@ -1,9 +1,0 @@
-fastapi==0.135.1
-uvicorn[standard]==0.41.0
-nibabel==5.3.3
-numpy==2.4.2
-scikit-image==0.26.0
-Pillow==12.1.1
-trimesh==4.11.2
-pydantic==2.12.5
-python-multipart==0.0.22

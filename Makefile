@@ -33,4 +33,4 @@ planner:
 	python src/planner.py --config config/planner.yaml --splits
 
 train_autoencoder:
-	CUDA_VISIBLE_DEVICES=$(dev) python main.py dataset.fold=${fold} > nohup_${fold}.out 2>&1 & echo "PID: $$!"
+	CUDA_VISIBLE_DEVICES=$(dev) python main.py dataset.fold=${fold} > nohup_${dev}.out 2>&1 & echo "PID: $$!"

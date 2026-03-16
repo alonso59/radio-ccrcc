@@ -1,8 +1,8 @@
-DATASET_ID: 820
+DATASET_ID: 220
 OUTPUT_BASE: "data/dataset"
 
-IMAGE_FOLDER: "data/dataset/Dataset820/nifti/"
-MASK_FOLDER: "data/dataset/Dataset820/seg/"
+IMAGE_FOLDER: "data/dataset/Dataset320/nifti/"
+MASK_FOLDER: "data/dataset/Dataset320/seg/"
 
 IMAGE_SUFFIX: "_0000.nii.gz"
 MASK_SUFFIX: ".nii.gz"

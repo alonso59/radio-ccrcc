@@ -7,6 +7,7 @@ from omegaconf import DictConfig
 from torchinfo import summary
 import logging
 from omegaconf import OmegaConf, DictConfig
+import torch.nn.functional as F
 
 BACKBONE_NORM = "frozen_batch"  # choose: "group" or "frozen_batch"
 
@@ -31,7 +32,7 @@ class Autoencoder(nn.Module):
             use_combined_linear=cfg.model.autoencoder.use_combined_linear,
             use_flash_attention=cfg.model.autoencoder.use_flash_attention
         )
-        self.phase_embedding = nn.Embedding(num_embeddings=4, embedding_dim=cfg.model.autoencoder.latent_channels)
+        # self.phase_embedding = nn.Embedding(num_embeddings=4, embedding_dim=cfg.model.autoencoder.latent_channels)
         if cfg.model.autoencoder.pretrain:
             logging.info("Loading pretrained weights from:", cfg.model.autoencoder.pretrained_path)
             state_dict = torch.load(cfg.model.autoencoder.pretrained_path)['model_state_dict']
@@ -44,21 +45,16 @@ class Autoencoder(nn.Module):
             for param in self.autoencoder.parameters():
                 param.requires_grad = False
                 
+    def encode_features(self, x, pooled=False):
+        z_mu, z_sigma = self.autoencoder.encode(x)
+        if pooled:
+            feat = F.adaptive_avg_pool3d(z_mu, 1).flatten(1)
+            return feat, z_mu, z_sigma
+        return z_mu, z_sigma
+    
     def forward(self, x, phase=None):
         z_mu, z_sigma = self.autoencoder.encode(x)
         z = self.autoencoder.sampling(z_mu, z_sigma)
-        
-        # if phase is not None:
-        #     phase_embedding = self.phase_embedding(phase)  # (B, latent_channels)
-        #     # Expand to match spatial dimensions of z
-        #     # z shape: (B, latent_channels, H, W, D)
-        #     _, _, h, w, d = z.shape
-        #     phase_embedding = phase_embedding.view(phase_embedding.shape[0], phase_embedding.shape[1], 1, 1, 1)
-        #     phase_embedding = phase_embedding.expand(-1, -1, h, w, d)  # (B, latent_channels, H, W, D)
-            
-        #     # Simple addition to modulate latent space (non-destructive)
-        #     z = z + phase_embedding
-        
         reconstruction = self.autoencoder.decode(z)
         return reconstruction, z_mu, z_sigma
 

@@ -23,9 +23,9 @@ def train_augmentations(data_stats) -> Compose:
     
     transforms = [
         RandomAffine(
-            scales=(0.9, 1.10),
-            degrees=15,
-            translation=(5, 5, 5),
+            scales=(0.95, 1.15),
+            degrees=5,
+            translation=(4, 4, 4),
             default_pad_value=-200,
             image_interpolation='bspline',
             label_interpolation='nearest',
@@ -44,11 +44,11 @@ def train_augmentations(data_stats) -> Compose:
             p=0.3
         ),
         
-        # Intensity augmentations
-        RandomGamma(log_gamma=(-0.15, 0.15), p=0.1, include=['ct']),
-        RandomBiasField(coefficients=0.3, p=0.1, include=['ct']),
-        RandomNoise(mean=0.0, std=(0.0, 0.05), p=0.1, include=['ct']),
-        RandomBlur(std=(0.0, 1.0), p=0.05, include=['ct']),
+        # # Intensity augmentations
+        # RandomGamma(log_gamma=(-0.15, 0.15), p=0.1, include=['ct']),
+        # RandomBiasField(coefficients=0.3, p=0.1, include=['ct']),
+        # RandomNoise(mean=0.0, std=(0.0, 0.05), p=0.1, include=['ct']),
+        # RandomBlur(std=(0.0, 1.0), p=0.05, include=['ct']),
 
         Clamp(out_min=P_LOW, out_max=P_HIGH, include=['ct']),
         

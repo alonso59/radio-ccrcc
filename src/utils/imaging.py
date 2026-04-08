@@ -1,6 +1,6 @@
 """Shared medical imaging utilities for visualization and training metrics."""
 
-from typing import Mapping, Optional, Tuple, Union
+from typing import Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -27,27 +27,27 @@ def squeeze_volume(volume: torch.Tensor) -> torch.Tensor:
 
 def window_ct_volume(
     volume: torch.Tensor,
-    norm_stats: Mapping[str, float],
     window: Tuple[float, float] = DEFAULT_CT_WINDOW,
 ) -> torch.Tensor:
-    """Map an IQR-normalized CT volume into a windowed `[0, 1]` display range."""
-    median, iqr = _get_norm_stats(norm_stats)
-    window_min, window_max = window
+    """Map a CT volume into a windowed `[0, 1]` display range.
 
-    hu_volume = volume * iqr + median
+    Assumes the volume is in the range [-1, 1] (window_rescale normalized).
+    Maps back to HU space and clips to the display window.
+    """
+    window_min, window_max = window
+    hu_volume = (volume + 1.0) / 2.0 * (window_max - window_min) + window_min
     return torch.clamp((hu_volume - window_min) / (window_max - window_min), 0.0, 1.0)
 
 
 def window_ct_pair(
     input_volume: torch.Tensor,
     reconstruction_volume: torch.Tensor,
-    norm_stats: Mapping[str, float],
     window: Tuple[float, float] = DEFAULT_CT_WINDOW,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Window an input/reconstruction pair into the same CT display range."""
     return (
-        window_ct_volume(input_volume, norm_stats, window=window),
-        window_ct_volume(reconstruction_volume, norm_stats, window=window),
+        window_ct_volume(input_volume, window=window),
+        window_ct_volume(reconstruction_volume, window=window),
     )
 
 
@@ -155,20 +155,3 @@ def _compose_mosaic(slices: torch.Tensor, grid_size: int, total_slots: int) -> t
     )
 
 
-def _get_norm_stats(norm_stats: Mapping[str, float]) -> Tuple[float, float]:
-    if norm_stats is None:
-        raise ValueError(
-            "CT windowing requires normalization stats with 'median' and 'iqr'. Got None."
-        )
-
-    if "median" not in norm_stats or "iqr" not in norm_stats:
-        raise ValueError(
-            "CT windowing requires normalization stats with 'median' and 'iqr'. "
-            f"Got keys: {sorted(norm_stats.keys())}"
-        )
-
-    median = float(norm_stats["median"])
-    iqr = float(norm_stats["iqr"])
-    if iqr == 0:
-        raise ValueError("CT windowing requires a non-zero 'iqr' normalization statistic.")
-    return median, iqr

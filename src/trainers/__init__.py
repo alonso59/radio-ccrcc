@@ -1,26 +1,22 @@
-"""
-Training module for radio-ccrcc project.
-Provides unified training infrastructure following SOLID principles.
-"""
+"""Lazy exports for training modules."""
 
-# Base trainer
-from .base_trainer import BaseTrainer
+from __future__ import annotations
 
-# Concrete trainers
-from .trainer import AutoencoderTrainer
-from .classifier_trainer import ClassifierTrainer
+from importlib import import_module
+from typing import Any
 
-# Factory
-from .trainer_factory import TrainerFactory
+__all__ = ["BaseTrainer", "AutoencoderTrainer", "ClassifierTrainer", "TrainerFactory"]
 
-# Legacy trainers (deprecated)
-# from .trainer import Trainer
-# from .trainer_gan import TrainerGAN
-# from .trainer_classifier import TrainerClassifierVAESpatial
+_EXPORTS = {
+    "BaseTrainer": ".base_trainer",
+    "AutoencoderTrainer": ".trainer",
+    "ClassifierTrainer": ".classifier_trainer",
+    "TrainerFactory": ".trainer_factory",
+}
 
-__all__ = [
-    'BaseTrainer',
-    'AutoencoderTrainer',
-    'ClassifierTrainer',
-    'TrainerFactory',
-]
+
+def __getattr__(name: str) -> Any:
+    if name not in _EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module = import_module(_EXPORTS[name], __name__)
+    return getattr(module, name)

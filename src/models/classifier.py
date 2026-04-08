@@ -1,32 +1,47 @@
-# asume input 3,8,8,8 to create a 3D classifier nn.Module
-
+"""Lightweight 3D classification head for latent space evaluation."""
 import torch
 import torch.nn as nn
-from typing import List, Dict, Callable, Optional, Tuple
+
 
 class Classifier3D(nn.Module):
-    def __init__(self, num_classes: int):
-        super(Classifier3D, self).__init__()
+    """Convolutional classification head for 3D latent volumes.
+
+    Designed to receive latent feature maps of shape ``(B, C, 16, 16, 16)``
+    and produce class logits. Typically used with a frozen autoencoder encoder
+    for downstream representation evaluation.
+
+    Args:
+        num_classes: Number of output classes.
+    """
+
+    def __init__(self, num_classes: int) -> None:
+        super().__init__()
         self.conv_compressor = nn.Sequential(
-            nn.Conv3d(8, 16, kernel_size=3, stride=1, padding=1),  #[B, 8, 16, 16, 16] -> [B, 16, 16, 16, 16]
-            nn.Conv3d(16, 16, kernel_size=3, stride=1, padding=1), #[B, 16, 16, 16, 16]
+            nn.Conv3d(8, 16, kernel_size=3, stride=1, padding=1),
+            nn.Conv3d(16, 16, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
-            nn.MaxPool3d(kernel_size=2, stride=2),                #[B, 16, 8, 8, 8]
-            nn.Conv3d(16, 32, kernel_size=3, stride=1, padding=1), #[B, 32, 8, 8, 8]
-            nn.Conv3d(32, 32, kernel_size=3, stride=1, padding=1), #[B, 32, 8, 8, 8]
+            nn.MaxPool3d(kernel_size=2, stride=2),
+            nn.Conv3d(16, 32, kernel_size=3, stride=1, padding=1),
+            nn.Conv3d(32, 32, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
-            nn.MaxPool3d(kernel_size=2, stride=2),                # [B, 32, 4, 4, 4] 
+            nn.MaxPool3d(kernel_size=2, stride=2),
         )
         self.cls_head = nn.Sequential(
-            # nn.AdaptiveAvgPool3d((1, 1, 1)),  # Output: [B, 128, 1, 1, 1]
-            nn.Flatten(),                      # Output: [B, 128]
-            nn.Linear(32*4*4*4, 128),                # Fully connected layer
+            nn.Flatten(),
+            nn.Linear(32 * 4 * 4 * 4, 128),
             nn.ReLU(),
             nn.Dropout(0.5),
-            nn.Linear(128, num_classes)         # Output layer
+            nn.Linear(128, num_classes),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Classify a batch of latent feature maps.
+
+        Args:
+            x: Latent tensor of shape ``(B, C, H, W, D)``.
+
+        Returns:
+            Class logits of shape ``(B, num_classes)``.
+        """
         x = self.conv_compressor(x)
-        x = self.cls_head(x)
-        return x
+        return self.cls_head(x)

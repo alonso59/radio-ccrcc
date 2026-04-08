@@ -1,11 +1,14 @@
 # Documentation
 
+## Product & Architecture
+
+- [Product Requirements Document (PRD)](PRD.md) — goals, user stories, data/model/config requirements
+- [Software Requirements Specification (SRS)](SRS.md) — system architecture, module specs, interface contracts, known limitations
+
+## Pipeline Guides
+
 - [Converter (DICOM → NIfTI)](converter.md)
 - [Preprocessor (VOI extraction)](preprocessor.md)
 - [Split generation](splits.md)
 - [Dataset planner](planner.md)
-
-## TODO
-
-- Training / model documentation (to be added)
-- Evaluation workflow documentation (to be added)
+- [Model evaluation](model_evaluation.md)

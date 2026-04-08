@@ -12,14 +12,15 @@ from pathlib import Path
 from typing import Optional
 
 # Import evaluation components
-from evaluation import ModelEvaluator
-from evaluation.test_loader import TestLoaderFactory
+from .evaluation import ModelEvaluator
+from .evaluation.test_loader import TestLoaderFactory
 
 # Import training components
 from torch.nn import L1Loss
 from monai.losses.perceptual import PerceptualLoss
-from dataloader.dataloader import DataLoaderFactory
-from models.autoencoder import Autoencoder
+from .dataloader.dataloader import DataLoaderFactory
+from .models.autoencoder import Autoencoder
+from .utils.checkpoints import resolve_best_checkpoint
 
 # Setup logging
 logging.basicConfig(
@@ -27,6 +28,15 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+def _resolve_best_checkpoint(run_dir: Path, config_path: Path) -> Optional[Path]:
+	"""Resolve the preferred evaluation checkpoint for a completed run."""
+	try:
+		cfg = OmegaConf.load(config_path)
+		training_mode = cfg.trainer.training_mode
+	except Exception:
+		training_mode = "autoencoder"
+	return resolve_best_checkpoint(run_dir, training_mode)
 
 def find_fold_experiments(results_base_dir: str) -> dict:
 	"""
@@ -65,10 +75,10 @@ def find_fold_experiments(results_base_dir: str) -> dict:
 					continue
 			
 			# Validate required files exist
-			checkpoint_path = run_dir / "checkpoint_best.pth"
 			config_path = run_dir / ".hydra" / "config.yaml"
+			checkpoint_path = _resolve_best_checkpoint(run_dir, config_path)
 			
-			if checkpoint_path.exists() and config_path.exists():
+			if checkpoint_path is not None and config_path.exists():
 				fold_experiments[fold_id] = {
 					'path': str(run_dir),
 					'config_path': str(config_path),
@@ -77,8 +87,8 @@ def find_fold_experiments(results_base_dir: str) -> dict:
 				logger.info(f"✓ Fold {fold_id}: {run_dir.relative_to(base_path)}")
 			else:
 				missing = []
-				if not checkpoint_path.exists():
-					missing.append("checkpoint_best.pth")
+				if checkpoint_path is None:
+					missing.append("checkpoint_best.pth/checkpoints/checkpoint_best.pth/checkpoints/best_*.pth")
 				if not config_path.exists():
 					missing.append(".hydra/config.yaml")
 				logger.warning(f"✗ Fold {fold_id}: Missing {', '.join(missing)} in {run_dir}")
@@ -107,8 +117,9 @@ def _find_most_recent_run(fold_dir: Path) -> Optional[Path]:
 		if date_dir.name == "latest":
 			continue
 		for time_dir in date_dir.glob("*/"):
-			checkpoint = time_dir / "checkpoint_best.pth"
-			if checkpoint.exists():
+			config_path = time_dir / ".hydra" / "config.yaml"
+			checkpoint = _resolve_best_checkpoint(time_dir, config_path)
+			if checkpoint is not None:
 				runs.append((checkpoint.stat().st_mtime, time_dir))
 	
 	if not runs:

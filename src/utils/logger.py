@@ -1,14 +1,21 @@
 """Simplified TensorBoard logger for training workflows."""
 
+from __future__ import annotations
+
+import logging
 import os
 from datetime import datetime
-from typing import Optional, List
+from pathlib import Path
+from typing import Any, List, Optional
 
+import numpy as np
 import torch
 from torch.utils.tensorboard.writer import SummaryWriter
-import numpy as np
 
 from . import viz_helpers
+from .metric_history import EpochScalarRecorder
+
+logger = logging.getLogger(__name__)
 
 
 class TensorBoardLogger:
@@ -38,6 +45,7 @@ class TensorBoardLogger:
         self.log_dir = self._build_log_directory(root, parent_dir, add_timestamp, use_date_structure)
         os.makedirs(self.log_dir, exist_ok=True)
         self.writer = SummaryWriter(log_dir=self.log_dir)
+        self.scalar_recorder = EpochScalarRecorder()
         
         if experiment_name:
             self.writer.add_text("experiment/name", experiment_name, 0)
@@ -63,36 +71,37 @@ class TensorBoardLogger:
     def add_scalar(self, tag: str, value: float, step: int, split: Optional[str] = None) -> None:
         """Log a scalar metric to TensorBoard."""
         tag_name = f"{tag}/{split}" if split else tag
+        self.scalar_recorder.add_scalar(tag_name, value, step)
         self.writer.add_scalar(tag_name, value, step)
 
     def log_scalars(self, group: str, scalars: dict, step: int) -> None:
-        """Log multiple related scalars efficiently."""
-        for name, value in scalars.items():
-            self.writer.add_scalar(f"{group}/{name}", value, step)
+        """Log multiple related scalars under a shared group tag."""
+        for split, value in scalars.items():
+            tag_name = f"{group}/{split}"
+            self.scalar_recorder.add_scalar(tag_name, value, step)
+            self.writer.add_scalar(tag_name, value, step)
     
     # ==================== Volume Visualization ==========================
     
     def log_axial_figure(
-        self, 
-        x: torch.Tensor, 
-        x_hat: torch.Tensor, 
-        step: int, 
+        self,
+        x: torch.Tensor,
+        x_hat: torch.Tensor,
+        step: int,
         tag: str = "val",
-        norm_stats: Optional[dict] = None,
         mask: Optional[torch.Tensor] = None
     ) -> None:
         """
         Log volume reconstruction comparison with optional tumor boundary overlay.
-        
+
         Args:
             x: Input volume
             x_hat: Reconstructed volume
             step: Current training step/epoch
             tag: Tag prefix for the figure
-            norm_stats: Normalization statistics for HU space visualization
             mask: Optional segmentation mask for tumor boundary overlay
         """
-        fig = viz_helpers.create_reconstruction_figure(x, x_hat, norm_stats=norm_stats, mask=mask)
+        fig = viz_helpers.create_reconstruction_figure(x, x_hat, mask=mask)
         self.writer.add_figure(f"{tag}/AxialGrid", fig, global_step=step, close=True)
     
     # ==================== Classification Metrics =======================
@@ -152,7 +161,7 @@ class TensorBoardLogger:
                 self.writer.add_figure(f"{tag}/ROC_AUC_OVR", fig, global_step=step, close=True)
                 self.add_scalar(f"Metrics/AUC_macro/{tag}", macro_auc, step)
         except ValueError as e:
-            print(f"Warning: Could not compute ROC curve - {e}")
+            logger.warning("Could not compute ROC curve: %s", e)
     
     # ===================== Latent Space Visualization ====================
     
@@ -181,11 +190,11 @@ class TensorBoardLogger:
         try:
             fig = viz_helpers.create_umap_figure(latents, labels, n_neighbors, min_dist, metric)
             self.writer.add_figure(f"{tag}/UMAP", fig, global_step=step, close=True)
-            print(f"✓ UMAP visualization logged to TensorBoard")
+            logger.debug("UMAP visualization logged to TensorBoard")
         except ImportError:
-            print("UMAP not installed. Install with: pip install umap-learn")
+            logger.warning("UMAP not installed. Install with: pip install umap-learn")
         except Exception as e:
-            print(f"Warning: UMAP visualization failed - {e}")
+            logger.warning("UMAP visualization failed: %s", e)
 
     # ======================== Logger Management =========================
     
@@ -200,3 +209,11 @@ class TensorBoardLogger:
     def get_log_dir(self) -> str:
         """Get the full path to the log directory."""
         return self.log_dir
+
+    def get_log_dir_path(self) -> Path:
+        """Get the TensorBoard log directory as a Path."""
+        return Path(self.log_dir)
+
+    def get_scalar_recorder(self) -> EpochScalarRecorder:
+        """Expose the epoch-level scalar recorder."""
+        return self.scalar_recorder

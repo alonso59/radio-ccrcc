@@ -9,7 +9,8 @@ def load_config(path):
     import yaml
 
     path = Path(path)
-    assert path.exists(), f"Config not found: {path}"
+    if not path.exists():
+        raise FileNotFoundError(f"Config not found: {path}")
 
     with open(path) as f:
         cfg = yaml.safe_load(f)

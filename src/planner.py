@@ -26,15 +26,22 @@ def cmd_splits(cfg):
 
 
 def cmd_fingerprint(cfg):
-    from preprocessor.fingerprint import compute_fingerprint
+    from preprocessor.fingerprint import run_fingerprint_pipeline, FingerprintConfig
 
     output_dir = Path(cfg["OUTPUT_DIR"])
-    compute_fingerprint(
-        output_dir,
+    # Build FingerprintConfig from YAML keys, with defaults for backward compatibility
+    fcfg = FingerprintConfig(
+        tumor_label=cfg.get("TUMOR_LABEL", 2),
+        kidney_label=cfg.get("KIDNEY_LABEL", 1),
         bbox_labels=cfg.get("BBOX_LABELS", [1, 2, 3]),
         hu_range=tuple(cfg.get("HU_RANGE", (-200, 300))),
         target_spacing=cfg.get("TARGET_SPACING") if cfg.get("TARGET_SPACING") != "auto" else None,
+        size_bin_percentiles=cfg.get("SIZE_BIN_PERCENTILES", [0, 20, 50, 80, 95, 100]),
+        balancing_alpha=cfg.get("BALANCING_ALPHA", 0.7),
+        min_lesion_voxels=cfg.get("MIN_LESION_VOXELS", 10),
+        patch_size_candidates=cfg.get("PATCH_SIZE_CANDIDATES"),
     )
+    run_fingerprint_pipeline(output_dir, fcfg)
 
 
 def main():

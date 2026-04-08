@@ -22,9 +22,10 @@ class ComponentFactory:
         """Create autoencoder model."""
         model = Autoencoder(cfg)
         if show_summary:
+            patch_size = cfg.dataset.sampler.patch_size
             summary(
-                model, 
-                input_size=(1, 1, 96, 96, 64),
+                model,
+                input_size=(1, 1, *patch_size),
                 col_names=["input_size", "output_size", "num_params", "trainable"],
                 depth=4
             )
@@ -82,12 +83,10 @@ class ComponentFactory:
         model: torch.nn.Module
     ) -> ModelCheckpoint:
         """Create model checkpoint callback."""
-        checkpoint_callback = ModelCheckpoint(
+        return ModelCheckpoint(
             dirpath=checkpoint_dir,
             monitor=monitor,
             mode=mode,
             save_best_only=True,
             filename=filename
         )
-        checkpoint_callback.set_model(model)
-        return checkpoint_callback

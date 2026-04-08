@@ -4,13 +4,15 @@ Memory-efficient test set evaluation.
 """
 
 import json
+import logging
+import os
+from typing import List, Tuple
+
+import numpy as np
 import torch
 import torchio as tio
-import numpy as np
-from typing import List, Tuple
-from torch.utils.data import DataLoader
 from omegaconf import DictConfig
-import logging
+from torch.utils.data import DataLoader
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +34,6 @@ class TestLoaderFactory:
         Returns:
             Normalized class label string
         """
-        import os
         class_label = os.path.basename(os.path.dirname(os.path.dirname(file_path)))
         
         # Normalize labels

@@ -73,13 +73,12 @@ def create_volume_mosaic(
 
 
 def create_reconstruction_figure(
-    x: torch.Tensor, 
+    x: torch.Tensor,
     x_hat: torch.Tensor,
-    norm_stats: Optional[dict] = None,
     mask: Optional[torch.Tensor] = None,
 ) -> Figure:
     """Create reconstruction mosaic + mid-slice comparison figure."""
-    panels = _prepare_reconstruction_panels(x, x_hat, norm_stats, mask)
+    panels = _prepare_reconstruction_panels(x, x_hat, mask)
 
     fig = plt.figure(figsize=(18, 10), dpi=120, constrained_layout=True, frameon=False)
     grid = fig.add_gridspec(2, 3, height_ratios=[2, 1])
@@ -93,14 +92,15 @@ def create_reconstruction_figure(
     _draw_image_panel(ax0, panels.input_mosaic, "Input", panels.boundary_mosaic, 1.2)
     _draw_image_panel(ax1, panels.reconstruction_mosaic, "Reconstruction", panels.boundary_mosaic, 1.2)
 
-    im_mosaic = ax2.imshow(panels.diff_mosaic, cmap="jet", vmin=0, vmax=1)
+    diff_max = max(float(panels.diff_mosaic.max()), 1e-6)
+    im_mosaic = ax2.imshow(panels.diff_mosaic, cmap="jet", vmin=0, vmax=diff_max)
     ax2.axis("off")
     fig.colorbar(im_mosaic, ax=ax2, fraction=0.046, pad=0.04)
 
     _draw_image_panel(ax3, panels.input_mid, boundary=panels.boundary_mid, linewidth=1.8)
     _draw_image_panel(ax4, panels.reconstruction_mid, boundary=panels.boundary_mid, linewidth=1.8)
 
-    im_mid = ax5.imshow(panels.diff_mid, cmap="jet", vmin=0, vmax=1)
+    im_mid = ax5.imshow(panels.diff_mid, cmap="jet", vmin=0, vmax=diff_max)
     ax5.axis("off")
     fig.colorbar(im_mid, ax=ax5, fraction=0.046, pad=0.04)
     return fig
@@ -298,13 +298,12 @@ def create_umap_figure(
 def _prepare_reconstruction_panels(
     x: torch.Tensor,
     x_hat: torch.Tensor,
-    norm_stats: Optional[dict],
     mask: Optional[torch.Tensor],
 ) -> _ReconstructionPanels:
     input_volume = _squeeze_volume(x)
     reconstruction_volume = _squeeze_volume(x_hat)
     input_volume, reconstruction_volume = _window_ct_pair(
-        input_volume, reconstruction_volume, norm_stats
+        input_volume, reconstruction_volume
     )
 
     input_mosaic, indices = _build_mosaic(input_volume)

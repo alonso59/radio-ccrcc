@@ -7,66 +7,56 @@ from functools import partial
 import logging
 logger = logging.getLogger(__name__)
 
-from torchio.transforms import RandomAffine, RandomElasticDeformation, RandomGamma, RandomBiasField, RandomNoise, RandomBlur, Clamp, Lambda, Compose
+from torchio.transforms import RandomAffine, RandomBiasField, RandomElasticDeformation, RandomGamma, RandomFlip, RandomNoise, RandomBlur, Clamp, Lambda, Compose
 
 
-P_LOW  = -200
-P_HIGH =  300
+P_LOW  = -200.0
+P_HIGH =  300.0
 
-def iqr_normalize(x, median, p25, p75):
-    return (x - median) / (p75 - p25 + 1e-8)
+def window_and_scale(x, p_low=P_LOW, p_high=P_HIGH):
+    x = torch.clamp(x, min=p_low, max=p_high)
+    x = 2.0 * (x - p_low) / (p_high - p_low) - 1.0
+    return x
+    # equivalente: (x - 50.0) / 250.0
 
-def train_augmentations(data_stats) -> Compose:
-
-    mean, std, median, p25, p75 = data_stats
-    norm_fn = partial(iqr_normalize, median=median, p25=p25, p75=p75)
-    
+def train_augmentations() -> Compose:
     transforms = [
         RandomAffine(
-            scales=(0.95, 1.15),
+            scales=(0.95, 1.05),
             degrees=5,
-            translation=(4, 4, 4),
-            default_pad_value=-200,
+            translation=(2, 2, 2),
+            default_pad_value=P_LOW,
             image_interpolation='bspline',
             label_interpolation='nearest',
             include=['ct', 'mask'],
             p=1.0
         ),
 
-        # Local non-rigid deformation
         RandomElasticDeformation(
             num_control_points=7,
-            max_displacement=(4.0, 4.0, 4.0),
+            max_displacement=(2, 2, 2),
             locked_borders=2,
             image_interpolation='bspline',
             label_interpolation='nearest',
             include=['ct', 'mask'],
-            p=0.3
+            p=0.1
         ),
         
-        # # Intensity augmentations
-        # RandomGamma(log_gamma=(-0.15, 0.15), p=0.1, include=['ct']),
-        # RandomBiasField(coefficients=0.3, p=0.1, include=['ct']),
-        # RandomNoise(mean=0.0, std=(0.0, 0.05), p=0.1, include=['ct']),
-        # RandomBlur(std=(0.0, 1.0), p=0.05, include=['ct']),
-
-        Clamp(out_min=P_LOW, out_max=P_HIGH, include=['ct']),
+        # Laterality generalization 
+        RandomFlip(axes=(0,), include=['ct', 'mask'], p=0.5),
         
-        # IQR normalization:
-        Lambda(norm_fn, include=['ct']),
+        # Intensity augmentations
+        # RandomGamma(log_gamma=(-0.1, 0.1), p=0.1, include=['ct']),
+        # RandomBiasField(coefficients=0.3, p=0.1, include=['ct']),
+        RandomNoise(mean=0.0, std=(0.0, 0.01), p=0.1, include=['ct']),
+        RandomBlur(std=(0.0, 1.0), p=0.05, include=['ct']),
+        
+        Lambda(window_and_scale, include=['ct']),
     ]
-    
     return Compose(transforms, p=1.0)
 
-def val_augmentations(data_stats) -> Compose:
-    mean, std, median, p25, p75 = data_stats
-    norm_fn = partial(iqr_normalize, median=median, p25=p25, p75=p75)
-    
+def val_augmentations() -> Compose:
     transforms = [
-        Clamp(out_min=P_LOW, out_max=P_HIGH, include=['ct']),
-
-        # IQR normalization:
-        Lambda(norm_fn, include=['ct'])
-    ]
-
+        Lambda(window_and_scale, include=['ct']),
+        ]
     return Compose(transforms, p=1.0)

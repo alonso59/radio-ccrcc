@@ -18,16 +18,82 @@ hydra:
     handlers:
       file:
         filename: ${hydra.runtime.output_dir}/Training_log_${now:%Y-%m-%d_%H-%M-%S}.log
-
 dataset:
-  dataset_id: Dataset320         # Dataset ID (e.g., Dataset220, Dataset320, Dataset420)
-  dataset_type: images           # Options: images | segmentation
-  base_path: data/dataset        # Base path to dataset folder
+  dataset_id: Dataset320
+  dataset_type: images
+  base_path: data/dataset
   fold: 0
-  batch_size: 16
-  num_workers: 12
+
+  batch_size: 8
+  num_workers: 6
   augment: true
   image_key: ct
+
+  samples_per_volume: 2
+  max_queue_length: 32
+
+  sampler:
+    patch_size: [96, 96, 64]
+    tumor_label: 2
+    background_sampling_prob: 0.0
+    center_jitter_fraction: 0.10
+    border_shift_fraction: 0.30
+    context_shift_fraction: 0.55
+    min_shift_voxels: 2.0
+    max_patches_per_lesion: null
+    subject_key_name: catalog_key
+    audit_enabled: false
+
+trainer:
+  training_mode: vae    # Options: autoencoder/vae (pure VAE or GAN via adversarial_warmup_epochs), classifier
+  max_epochs: 500
+  checkpoint_dir: checkpoints/
+  resume_checkpoint_path: null   # null = fresh start, set a .pth path to resume/warm-start from that checkpoint
+  device: cuda
+  use_dataparallel: false        # Use DataParallel for multi-GPU training
+  use_amp: false                 # if you want AMP for speed
+  log_image_every_n_steps: 200  # optional step-wise preview
+  monitor_metric: val_recon       # e.g. val_loss, val_recon, val_PSNR, val_accuracy
+  monitor_mode: min              # min for losses, max for scores like PSNR/SSIM/accuracy
+  experiment_name: null         # Optional: descriptive name for this run (logged as metadata)
+  probe_interval: 10        
+  probe_max_batches: 20      # batches to extract embeddings (was 100, 20 is enough)
+  probe_epochs: 10          # epochs del clasificador lineal
+  probe_lr: 1e-3
+  probe_l2: 1e-4
+  log_step_interval: 15      # log step-level metrics every N steps (reduces TensorBoard I/O)
+  metric_log_interval: 5     # log confusion matrix / ROC curve every N epochs
+  adversarial_warmup_epochs: 100   # null = no GAN, 0 = GAN from epoch 0, N = warm-up N epochs then GAN
+  use_masked_loss: true
+  grad_clip_norm: 1.0           # max gradient norm; prevents KL explosion in VAE
+
+scheduler:
+  name: CosineAnnealingLR
+  T_max: 500
+  eta_min: 1e-6
+
+optimizer:
+  name: Adam
+  lr_unet: 0.0001
+  lr: 3e-4
+  lr_d: 1e-4
+  betas: [0.5, 0.999]
+  betas_d: [0.5, 0.999]
+  weight_decay: 0.0
+  
+loss_weights:
+  recon: 1.0
+  perceptual: 0.1
+  adversarial: 0.005
+  kl: 1e-5
+  w_tumor: 1.0
+  w_nontumor: 0.5
+
+contrastive:
+  enabled: false
+  method: null        # e.g. byol, simsiam, ntxent
+  loss_weight: 0.1
+  temperature: 0.07
 
 ldm:
   num_train_steps: 1000
@@ -40,53 +106,3 @@ ldm:
   ema_decay: 0.0                # e.g., 0.9999 to enable EMA
   log_image_interval: 5
   label_key: label              # optional, if your dataloader provides class labels
-
-trainer:
-  training_mode: vae    # Options: vae, gan, classifier
-  max_epochs: 200
-  checkpoint_dir: checkpoints/
-  device: cuda
-  use_dataparallel: true        # Use DataParallel for multi-GPU training
-  use_amp: true                 # if you want AMP for speed
-  log_image_every_n_steps: 200  # optional step-wise preview
-  monitor_metric: val_loss          # Metric to monitor for best model
-  experiment_name: null         # Optional: descriptive name for this run (logged as metadata)
-  probe_interval: 10        # cada N épocas
-  probe_max_batches: 100     # cuántos batches para extraer embeddings (barato)
-  probe_epochs: 10          # epochs del clasificador lineal
-  probe_lr: 1e-2
-  probe_l2: 1e-4
-
-scheduler:
-  name: CosineAnnealingLR
-  T_max: 200
-  eta_min: 1e-6
-
-loss:
-  lpips_net: alex
-  lpips_max_slices: 8
-  lpips_min_step: 1
-
-optimizer:
-  name: Adam
-  lr: 1e-3
-  lr_g: 1e-3
-  lr_d: 1e-4
-  lr_unet: 0.0001
-  betas_g: [0.5, 0.999]
-  betas_d: [0.0, 0.99]
-  weight_decay: 0.0
-
-loss_weights:
-  recon: 1.0
-  perceptual: 0.5
-  adversarial: 0.001
-  kl: 1e-4  
-
-adversarial_warmup_epochs: 50
-
-gan:
-  type: hinge_sn # hinge_sn, wgan-gp
-  lambda_gp: 10.0
-  n_critic: 5
-  spectral_norm: false

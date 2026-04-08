@@ -1,13 +1,9 @@
 # Latent Diffusion Model: AutoencoderKL + DRUNet in latent space
-import hydra
 import torch
 import torch.nn as nn
-from autoencoder import Autoencoder
-from drunet import DRUNet
-from torchinfo import summary
 
-import torch
-from torch import nn
+from .autoencoder import Autoencoder
+from .drunet import DRUNet
 
 class LatentDiffusionModel(nn.Module):
     def __init__(self, cfg):
@@ -57,20 +53,6 @@ class LatentDiffusionModel(nn.Module):
         return reconstruction, z_mu, z_denoised
 
 
-@hydra.main(config_path="/home/alonso/Documents/radio-ccrcc/config/", config_name="config", version_base="1.1")
-def main(cfg):
-	model = LatentDiffusionModel(cfg)
-	x = torch.randn(2, 1, 128, 128, 128)
-	# Sample random timesteps for diffusion
-	batch_size = x.shape[0]
-	N = 1000  # total diffusion steps
-	t = torch.randint(0, N, (batch_size, 1), device=x.device).float() / N
-	reconstruction, z, z_denoised = model(x, t)
-	print("Input:", x.shape)
-	print("Latent:", z.shape)
-	print("Denoised latent:", z_denoised.shape)
-	print("Reconstruction:", reconstruction.shape)
-	summary(model, input_data=(x, t), col_names=["input_size", "output_size", "num_params", "trainable"], depth=4)
 
 # Example usage	
 if __name__ == "__main__":

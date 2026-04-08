@@ -1,10 +1,14 @@
+import logging
+
 import torch
 import torch.nn as nn
+from monai.networks.blocks.convolutions import Convolution
 from monai.networks.nets.autoencoderkl import Decoder
 from monai.networks.nets.swin_unetr import SwinUNETR
-from monai.networks.blocks.convolutions import Convolution
 from omegaconf import DictConfig
 from torchinfo import summary
+
+logger = logging.getLogger(__name__)
 
 class AutoencoderUNETR(nn.Module):
     """
@@ -39,8 +43,13 @@ class AutoencoderUNETR(nn.Module):
         )
         # Load pretrained weights
         try:
-            path = '/home/alonso/Documents/radio-ccrcc/models/pretrained/model_swinvit.pt'
-            print(f"Loading pretrained SwinUNETR weights from: {path}")
+            path = cfg.model.autoencoder.get("swinvit_pretrained_path", None)
+            if path is None:
+                raise FileNotFoundError(
+                    "cfg.model.autoencoder.swinvit_pretrained_path is not set. "
+                    "Add it to config/model/model.yaml."
+                )
+            logger.info("Loading pretrained SwinUNETR weights from: %s", path)
             loaded = torch.load(path)
             
             if isinstance(loaded, dict):
@@ -73,14 +82,12 @@ class AutoencoderUNETR(nn.Module):
             
             # Count only swinViT related missing keys
             swin_missing = [k for k in missing if k.startswith('swinViT.')]
-            print(f"Loaded pretrained Swin Transformer weights:")
-            print(f"  Loaded: {len(swin_state_dict)} keys")
-            print(f"  Missing swinViT keys: {len(swin_missing)}")
-            print(f"  Total missing (including decoder): {len(missing)}")
-            
+            logger.info(
+                "Loaded pretrained SwinUNETR weights: %d keys, %d swinViT missing, %d total missing",
+                len(swin_state_dict), len(swin_missing), len(missing),
+            )
         except Exception as e:
-            print(f"Warning: Could not load pretrained weights: {e}")
-            print("Training from scratch...")
+            logger.warning("Could not load pretrained weights: %s. Training from scratch.", e)
 
         # Extract encoder from SwinUNETR
         self.swinViT = self.swin_unetr.swinViT

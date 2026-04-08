@@ -2,9 +2,13 @@
 Configuration Manager - Handles configuration loading and validation.
 Follows Single Responsibility Principle.
 """
+
 from typing import List
-from omegaconf import DictConfig
+
 import hydra
+from omegaconf import DictConfig
+
+from ..utils.training_modes import normalize_training_mode
 
 
 class ConfigManager:
@@ -25,7 +29,7 @@ class ConfigManager:
     
     def get_training_mode(self) -> str:
         """Get the normalized training mode."""
-        return self.cfg.trainer.training_mode.lower()
+        return normalize_training_mode(self.cfg.trainer.training_mode)
     
     def resolve_paths(self) -> None:
         """Resolve relative paths to absolute paths."""

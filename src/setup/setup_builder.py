@@ -1,8 +1,9 @@
-"""
-Training Setup Builder - Builds training configurations using Builder Pattern.
-Follows Builder Pattern, Single Responsibility, and Open/Closed Principles.
-"""
-from typing import Dict, Any, List, Optional
+"""Builders for assembling training setups."""
+
+from __future__ import annotations
+
+from typing import Any
+
 import torch
 from omegaconf import DictConfig
 
@@ -11,81 +12,98 @@ from .config_manager import ConfigManager
 from ..trainers.trainer_factory import TrainerFactory
 from ..utils.logger import TensorBoardLogger
 from ..utils.results_callback import ResultsFolderCallback
+from ..utils.training_modes import normalize_training_mode
+
 
 class TrainingSetup:
-    """Data class holding all training components."""
-    
+    """Container holding the trainer and logger."""
+
     def __init__(self, trainer: Any, logger: TensorBoardLogger):
         self.trainer = trainer
         self.logger = logger
 
 
 class BaseSetupBuilder:
-    """Base builder for common training setup steps."""
-    
+    """Shared builder utilities for training setup."""
+
     def __init__(self, cfg: DictConfig, config_manager: ConfigManager):
         self.cfg = cfg
         self.config_manager = config_manager
-        self.model = None
+        self.logger: TensorBoardLogger | None = None
+        self.device: torch.device | None = None
         self.dataloaders = None
-        self.norm_stats = None  # NEW: Store normalization statistics
-        self.logger = None
-        self.callbacks = []
-        self.device = None
-    
-    def build_dataloaders(self) -> 'BaseSetupBuilder':
-        """Build data loaders and extract normalization statistics."""
+        self.norm_stats = None
+        self.callbacks: list[Any] = []
+
+    def build_dataloaders(self) -> "BaseSetupBuilder":
         self.dataloaders, self.norm_stats = ComponentFactory.create_dataloaders(self.cfg.dataset)
         return self
-    
-    def build_device(self) -> 'BaseSetupBuilder':
-        """Setup device."""
+
+    def build_device(self) -> "BaseSetupBuilder":
         self.device = torch.device(self.config_manager.get_device())
         return self
-    
-    def build_logger(self, experiment_prefix: str) -> 'BaseSetupBuilder':
-        """Build logger."""
+
+    def build_logger(self, experiment_prefix: str) -> "BaseSetupBuilder":
         experiment_name = self.config_manager.get_experiment_name(experiment_prefix)
         self.logger = ComponentFactory.create_logger(experiment_name)
         return self
-    
+
     def build(self) -> TrainingSetup:
-        """Build final training setup. To be implemented by subclasses."""
-        raise NotImplementedError("Subclasses must implement build()")
+        raise NotImplementedError
+
+    def _create_standard_callbacks(self, model: torch.nn.Module, filename: str) -> list[Any]:
+        checkpoint = ComponentFactory.create_checkpoint_callback(
+            checkpoint_dir=self.cfg.trainer.checkpoint_dir,
+            monitor=str(getattr(self.cfg.trainer, "monitor_metric", "val_loss")),
+            mode=str(getattr(self.cfg.trainer, "monitor_mode", "min")),
+            filename=filename,
+            model=model,
+        )
+        results = ResultsFolderCallback(self.cfg)
+        return [checkpoint, results]
+
+    def _attach_callback_context(self, trainer: Any, model: torch.nn.Module | None = None) -> None:
+        for callback in self.callbacks:
+            if model is not None and hasattr(callback, "set_model"):
+                callback.set_model(model)
+            if self.logger is not None and hasattr(callback, "set_logger"):
+                callback.set_logger(self.logger)
+            if hasattr(callback, "set_trainer"):
+                callback.set_trainer(trainer)
+
+    def _validate_common_state(self) -> None:
+        if self.dataloaders is None or self.device is None or self.logger is None:
+            raise RuntimeError("Build steps must be called before build()")
 
 
 class AutoencoderSetupBuilder(BaseSetupBuilder):
-    """Builder for autoencoder training setup."""
-    
-    def build_model(self) -> 'AutoencoderSetupBuilder':
-        """Build autoencoder model."""
+    """Builder for all representation-learning modes."""
+
+    def __init__(self, cfg: DictConfig, config_manager: ConfigManager):
+        super().__init__(cfg, config_manager)
+        self.model: torch.nn.Module | None = None
+
+    def build_model(self) -> "AutoencoderSetupBuilder":
         self.model = ComponentFactory.create_autoencoder(self.cfg)
         self.model = ComponentFactory.wrap_dataparallel(
             self.model,
             self.config_manager.get_device(),
-            self.config_manager.should_use_dataparallel()
+            self.config_manager.should_use_dataparallel(),
         )
         return self
-    
-    def build_callbacks(self) -> 'AutoencoderSetupBuilder':
-        """Build callbacks."""
-        checkpoint_callback = ComponentFactory.create_checkpoint_callback(
-            checkpoint_dir=self.cfg.trainer.checkpoint_dir,
-            monitor='val_loss',
-            mode='min',
-            filename='best_autoencoder.pth',
-            model=self.model
-        )
-        results_callback = ResultsFolderCallback(self.cfg)
-        results_callback.set_model(self.model)
-        self.callbacks = [checkpoint_callback, results_callback]
+
+    def build_callbacks(self) -> "AutoencoderSetupBuilder":
+        if self.model is None:
+            raise RuntimeError("Model must be built before callbacks")
+        mode_name = str(self.cfg.trainer.training_mode).lower()
+        self.callbacks = self._create_standard_callbacks(self.model, f"best_{mode_name}.pth")
         return self
-    
+
     def build(self) -> TrainingSetup:
-        """Build autoencoder training setup."""
-        if self.dataloaders is None or self.device is None or self.logger is None:
-            raise RuntimeError("Build steps must be called before build()")
-        
+        self._validate_common_state()
+        if self.model is None:
+            raise RuntimeError("Model must be built before build()")
+
         trainer = TrainerFactory.create(
             cfg=self.cfg,
             dataloaders=self.dataloaders,
@@ -93,105 +111,46 @@ class AutoencoderSetupBuilder(BaseSetupBuilder):
             logger=self.logger,
             callbacks=self.callbacks,
             normalization_stats=self.norm_stats,
-            model=self.model
+            model=self.model,
         )
-        return TrainingSetup(trainer, self.logger)
-
-
-class AdversarialSetupBuilder(BaseSetupBuilder):
-    """Builder for adversarial autoencoder training setup."""
-    
-    def build_model(self) -> 'AdversarialSetupBuilder':
-        """Build adversarial autoencoder model."""
-        self.model = ComponentFactory.create_autoencoder(self.cfg)
-        self.model = ComponentFactory.wrap_dataparallel(
-            self.model,
-            self.config_manager.get_device(),
-            self.config_manager.should_use_dataparallel()
-        )
-        return self
-    
-    def build_callbacks(self) -> 'AdversarialSetupBuilder':
-        """Build callbacks."""
-        checkpoint_callback = ComponentFactory.create_checkpoint_callback(
-            checkpoint_dir=self.cfg.trainer.checkpoint_dir,
-            monitor='val_recon',
-            mode='min',
-            filename='best_adversarial.pth',
-            model=self.model
-        )
-        results_callback = ResultsFolderCallback(self.cfg)
-        results_callback.set_model(self.model)
-        self.callbacks = [checkpoint_callback, results_callback]
-        return self
-    
-    def build(self) -> TrainingSetup:
-        """Build adversarial training setup."""
-        if self.dataloaders is None or self.device is None or self.logger is None:
-            raise RuntimeError("Build steps must be called before build()")
-        
-        trainer = TrainerFactory.create(
-            cfg=self.cfg,
-            dataloaders=self.dataloaders,
-            device=self.device,
-            logger=self.logger,
-            callbacks=self.callbacks,
-            normalization_stats=self.norm_stats,
-            model=self.model
-        )
+        self._attach_callback_context(trainer, model=self.model)
         return TrainingSetup(trainer, self.logger)
 
 
 class ClassifierSetupBuilder(BaseSetupBuilder):
-    """Builder for classifier training setup."""
-    
+    """Builder for classifier training."""
+
     def __init__(self, cfg: DictConfig, config_manager: ConfigManager):
         super().__init__(cfg, config_manager)
-        self.model_auto = None
-        self.model_class = None
-    
-    def build_model(self) -> 'ClassifierSetupBuilder':
-        """Build autoencoder and classifier models."""
-        # Autoencoder
+        self.model_auto: torch.nn.Module | None = None
+        self.model_class: torch.nn.Module | None = None
+
+    def build_model(self) -> "ClassifierSetupBuilder":
         self.model_auto = ComponentFactory.create_autoencoder(self.cfg, show_summary=False)
         self.model_auto = ComponentFactory.wrap_dataparallel(
             self.model_auto,
             self.config_manager.get_device(),
-            self.config_manager.should_use_dataparallel()
+            self.config_manager.should_use_dataparallel(),
         )
-        
-        # Classifier
-        num_classes = self.config_manager.get_num_classes()
-        self.model_class = ComponentFactory.create_classifier(num_classes)
+        self.model_class = ComponentFactory.create_classifier(self.config_manager.get_num_classes())
         self.model_class = ComponentFactory.wrap_dataparallel(
             self.model_class,
             self.config_manager.get_device(),
-            self.config_manager.should_use_dataparallel()
+            self.config_manager.should_use_dataparallel(),
         )
         return self
-    
-    def build_callbacks(self) -> 'ClassifierSetupBuilder':
-        """Build callbacks."""
+
+    def build_callbacks(self) -> "ClassifierSetupBuilder":
         if self.model_class is None:
             raise RuntimeError("Model must be built before callbacks")
-        
-        checkpoint_callback = ComponentFactory.create_checkpoint_callback(
-            checkpoint_dir=self.cfg.trainer.checkpoint_dir,
-            monitor='val_loss',
-            mode='min',
-            filename='best_classifier.pth',
-            model=self.model_class
-        )
-        results_callback = ResultsFolderCallback(self.cfg)
-        results_callback.set_model(self.model_class)
-        self.callbacks = [checkpoint_callback, results_callback]
+        self.callbacks = self._create_standard_callbacks(self.model_class, "best_classifier.pth")
         return self
-    
+
     def build(self) -> TrainingSetup:
-        """Build classifier training setup."""
-        if self.dataloaders is None or self.device is None or self.logger is None:
-            raise RuntimeError("Build steps must be called before build()")
-        
+        self._validate_common_state()
+        if self.model_auto is None or self.model_class is None:
+            raise RuntimeError("Models must be built before build()")
+
         trainer = TrainerFactory.create(
             cfg=self.cfg,
             dataloaders=self.dataloaders,
@@ -202,43 +161,38 @@ class ClassifierSetupBuilder(BaseSetupBuilder):
             model_auto=self.model_auto,
             model_class=self.model_class,
             class_names=self.config_manager.get_class_names(),
-            allow_resize=self.config_manager.allow_resize()
+            allow_resize=self.config_manager.allow_resize(),
         )
+        self._attach_callback_context(trainer, model=self.model_class)
         return TrainingSetup(trainer, self.logger)
 
 
 class SetupBuilderDirector:
-    """Director that orchestrates the building process."""
-    
+    """Orchestrate the setup build sequence."""
+
     BUILDER_REGISTRY = {
         "autoencoder": (AutoencoderSetupBuilder, "autoencoder"),
-        "vae": (AutoencoderSetupBuilder, "autoencoder"),
-        "adversarial": (AdversarialSetupBuilder, "adversarial"),
-        "gan": (AdversarialSetupBuilder, "adversarial"),
         "classifier": (ClassifierSetupBuilder, "classifier"),
     }
-    
+
     def __init__(self, cfg: DictConfig, config_manager: ConfigManager):
         self.cfg = cfg
         self.config_manager = config_manager
-    
+
     def construct_setup(self, training_mode: str) -> TrainingSetup:
-        """Construct complete training setup based on mode."""
-        if training_mode not in self.BUILDER_REGISTRY:
-            available_modes = list(self.BUILDER_REGISTRY.keys())
-            raise ValueError(
-                f"Unknown training mode: '{training_mode}'. "
-                f"Available modes: {available_modes}"
-            )
-        
-        builder_class, experiment_prefix = self.BUILDER_REGISTRY[training_mode]
+        canonical_mode = normalize_training_mode(training_mode)
+        if canonical_mode not in self.BUILDER_REGISTRY:
+            available = sorted(self.BUILDER_REGISTRY)
+            raise ValueError(f"Unknown training mode: {training_mode!r}. Available modes: {available}")
+
+        builder_class, experiment_prefix = self.BUILDER_REGISTRY[canonical_mode]
         builder = builder_class(self.cfg, self.config_manager)
-        
-        # Execute build steps in order
-        return (builder
-                .build_dataloaders()
-                .build_device()
-                .build_logger(experiment_prefix)
-                .build_model()
-                .build_callbacks()
-                .build())
+        return (
+            builder
+            .build_dataloaders()
+            .build_device()
+            .build_logger(experiment_prefix)
+            .build_model()
+            .build_callbacks()
+            .build()
+        )

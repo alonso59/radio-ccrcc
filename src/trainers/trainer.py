@@ -1,29 +1,97 @@
-"""
-Pure Autoencoder Trainer (VAE/AE without adversarial component).
-Handles reconstruction + KL divergence loss.
-"""
-from typing import Dict, Any, Optional, Callable
-import numpy as np
+"""Autoencoder trainer with optional adversarial and monitoring helpers."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Dict, Optional
+
 import torch
-import torch.optim as optim
-from omegaconf import DictConfig
-
-from torch.nn import L1Loss
-from monai.losses.perceptual import PerceptualLoss
-from monai.losses.adversarial_loss import PatchAdversarialLoss
-from monai.networks.nets.patchgan_discriminator import MultiScalePatchDiscriminator
-
-from .base_trainer import BaseTrainer
-from ..dataloader.dataloader import map_label_to_category
-from ..utils.scheduler import get_scheduler
 import torch.nn.functional as F
+import torch.optim as optim
+from monai.losses.perceptual import PerceptualLoss
+from omegaconf import DictConfig
+from torch.nn import L1Loss
+
+from .adversarial_runtime import AdversarialSettings, build_adversarial_runtime
+from .base_trainer import BaseTrainer
+from .representation_monitoring import MonitoringSettings, RepresentationMonitor
+from ..utils.scheduler import get_scheduler
+
+try:
+    from torch.amp.grad_scaler import GradScaler
+except ImportError:  # pragma: no cover - torch version dependent
+    from torch.cuda.amp import GradScaler
+
+
+@dataclass(frozen=True)
+class AutoencoderSettings:
+    """Normalized trainer settings used throughout the autoencoder flow."""
+
+    use_masked_loss: bool
+    grad_clip_norm: float
+    kl_weight: float
+    perceptual_weight: float
+    tumor_weight: float
+    non_tumor_weight: float
+    use_amp: bool
+    amp_device: str
+    optimizer_name: str
+    generator_lr: float
+    generator_betas: tuple[float, float]
+    weight_decay: float
+    adversarial: AdversarialSettings
+    monitoring: MonitoringSettings
+
+    @classmethod
+    def from_cfg(cls, cfg: DictConfig, device: torch.device) -> "AutoencoderSettings":
+        trainer_cfg = cfg.trainer
+        optimizer_cfg = cfg.optimizer
+        loss_cfg = cfg.loss_weights
+        amp_device = device.type if device.type == "cuda" else "cpu"
+        warmup_epochs = trainer_cfg.adversarial_warmup_epochs
+
+        return cls(
+            use_masked_loss=bool(getattr(trainer_cfg, "use_masked_loss", False)),
+            grad_clip_norm=float(getattr(trainer_cfg, "grad_clip_norm", 1.0)),
+            kl_weight=float(loss_cfg.kl),
+            perceptual_weight=float(loss_cfg.perceptual),
+            tumor_weight=float(loss_cfg.w_tumor),
+            non_tumor_weight=float(loss_cfg.w_nontumor),
+            use_amp=bool(trainer_cfg.use_amp),
+            amp_device=amp_device,
+            optimizer_name=str(optimizer_cfg.name),
+            generator_lr=float(optimizer_cfg.lr),
+            generator_betas=tuple(optimizer_cfg.betas),
+            weight_decay=float(getattr(optimizer_cfg, "weight_decay", 0.0)),
+            adversarial=AdversarialSettings(
+                enabled=warmup_epochs is not None,
+                warmup_epochs=warmup_epochs,
+                weight=float(loss_cfg.adversarial),
+                use_amp=bool(trainer_cfg.use_amp),
+                amp_device=amp_device,
+                optimizer_name=str(optimizer_cfg.name),
+                generator_lr=float(optimizer_cfg.lr),
+                discriminator_lr=float(optimizer_cfg.lr_d),
+                generator_betas=tuple(optimizer_cfg.betas),
+                discriminator_betas=tuple(optimizer_cfg.betas_d),
+                weight_decay=float(getattr(optimizer_cfg, "weight_decay", 0.0)),
+            ),
+            monitoring=MonitoringSettings(
+                collect_latents=bool(getattr(trainer_cfg, "collect_latents", True)),
+                umap_log_interval=int(getattr(trainer_cfg, "umap_log_interval", 10)),
+                image_log_interval=int(getattr(trainer_cfg, "image_log_interval", 5)),
+                probe_interval=int(getattr(trainer_cfg, "probe_interval", 0)),
+                probe_max_batches=int(getattr(trainer_cfg, "probe_max_batches", 20)),
+                probe_epochs=int(getattr(trainer_cfg, "probe_epochs", 50)),
+                probe_lr=float(getattr(trainer_cfg, "probe_lr", 1e-2)),
+                probe_l2=float(getattr(trainer_cfg, "probe_l2", 1e-4)),
+            ),
+        )
+
 
 class AutoencoderTrainer(BaseTrainer):
-    """
-    Trainer for pure Autoencoder (VAE) without adversarial training.
-    Optimizes reconstruction + KL divergence.
-    """
-    
+    """Trainer for autoencoders with optional adversarial training."""
+
     def __init__(
         self,
         cfg: DictConfig,
@@ -36,452 +104,228 @@ class AutoencoderTrainer(BaseTrainer):
         normalization_stats: Optional[Dict[str, float]] = None,
     ):
         super().__init__(cfg, dataloaders, device, logger, callbacks, max_epochs, normalization_stats)
-        self.model = model
-        
-        
-        # Latent space collection for UMAP
-        self.collect_latents = getattr(cfg.trainer, 'collect_latents', True)
-        self.latent_collection = {'train': [], 'val': []}
-        self.label_collection = {'train': [], 'val': []}
-        self.discriminator = MultiScalePatchDiscriminator(
-            num_d=2, 
-            num_layers_d=2, 
-            spatial_dims=3, 
-            channels=32, 
-            in_channels=1, 
-            out_channels=1,
-            minimum_size_im=64  # Match minimum dimension of input (96,96,64)
+        self.model = model.to(device)
+        self.settings = AutoencoderSettings.from_cfg(cfg, device)
+        self.adversarial = build_adversarial_runtime(self.settings.adversarial, device, cfg.scheduler)
+        self.monitoring = RepresentationMonitor(
+            self.settings.monitoring,
+            logger=self.logger,
+            model=self.model,
+            dataloaders=self.dataloaders,
+            device=self.device,
         )
-        self.discriminator.to(device)
-        self.adv_running = False
-        # Cached config
-        self.use_masked_loss = getattr(self.cfg.trainer, 'use_masked_loss', False)
-        self.kl_w = self.cfg.loss_weights.kl
-        self.perc_w = self.cfg.loss_weights.perceptual
-        self.adv_w = self.cfg.loss_weights.adversarial
-        self.adv_warmup_epochs = self.cfg.adversarial_warmup_epochs
 
-        self.samples = {"train": {}, "val": {}}
-        
-        # Initialize components
-        self.setup_models()
         self.setup_optimizers()
         self.setup_schedulers()
         self.setup_criteria()
-        
+        self.scaler_g = self._create_grad_scaler()
+
     def setup_models(self) -> None:
-        """Move model to device."""
-        self.model = self.model.to(self.device)
-    
+        """No-op: models are already provided to the trainer."""
+
     def setup_optimizers(self) -> None:
-        """Initialize optimizer for autoencoder."""
-        OptimClass = getattr(optim, self.cfg.optimizer.name)
-        
-        self.optimizer_g = OptimClass(params=self.model.parameters(), 
-                                      lr=self.cfg.optimizer.lr_g, 
-                                      betas=self.cfg.optimizer.betas_g,
-                                      weight_decay=getattr(self.cfg.optimizer, 'weight_decay', 0.0))
-        
-        self.optimizer_d = OptimClass(params=self.discriminator.parameters(), 
-                                      lr=self.cfg.optimizer.lr_d, 
-                                      betas=self.cfg.optimizer.betas_d,
-                                      weight_decay=getattr(self.cfg.optimizer, 'weight_decay', 0.0))
-    
+        optimizer_cls = getattr(optim, self.settings.optimizer_name)
+        self.optimizer_g = optimizer_cls(
+            params=self.model.parameters(),
+            lr=self.settings.generator_lr,
+            betas=self.settings.generator_betas,
+            weight_decay=self.settings.weight_decay,
+        )
+
     def setup_schedulers(self) -> None:
-        """Initialize learning rate scheduler."""
         self.scheduler_g = get_scheduler(self.optimizer_g, self.cfg.scheduler)
-        self.scheduler_d = get_scheduler(self.optimizer_d, self.cfg.scheduler)
 
     def setup_criteria(self) -> None:
         self.l1_loss = L1Loss()
-        self.adv_loss = PatchAdversarialLoss(criterion="least_squares")
-        self.loss_perceptual = PerceptualLoss(spatial_dims=3, network_type="squeeze", is_fake_3d=True, fake_3d_ratio=0.2)
-        self.loss_perceptual.to(self.device)
-    
+        self.loss_perceptual = PerceptualLoss(
+            spatial_dims=3,
+            network_type="squeeze",
+            is_fake_3d=True,
+            fake_3d_ratio=0.2,
+        ).to(self.device)
+
     def set_train_mode(self, train: bool) -> None:
-        """Set model to train or eval mode."""
         self.model.train(train)
-    
-    def kl_loss(self, z_mu, z_sigma):
-        klloss = 0.5 * torch.sum(z_mu.pow(2) + z_sigma.pow(2) - torch.log(z_sigma.pow(2)) - 1, dim=[1, 2, 3, 4])
-        return torch.sum(klloss) / klloss.shape[0]
-    
-    def _apply_tumor_mask(self, tensor: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-        """
-        Apply binary tumor mask to tensor for masked loss computation.
-        
-        Args:
-            tensor: Input tensor (B, C, H, W, D)
-            mask: Binary mask (B, 1, H, W, D) with 1=tumor, 0=background
-            
-        Returns:
-            Masked tensor with same shape (non-tumor regions zeroed)
-        """
-        return tensor * mask.float()
+        if hasattr(self.adversarial, "discriminator"):
+            self.adversarial.discriminator.train(train)
 
-    def _set_discriminator_requires_grad(self, requires_grad: bool) -> None:
-        for p in self.discriminator.parameters():
-            p.requires_grad_(requires_grad)
+    def train_step(self, epoch: int, batch: Any) -> Dict[str, float]:
+        inputs, phase, multilabel_mask, tumor_mask = self._unpack_batch(batch)
 
-    def masked_mean(self, x, mask, eps=1e-6):
-        mask = mask.float()
-        return (x * mask).sum() / mask.sum().clamp_min(eps)
+        self.optimizer_g.zero_grad(set_to_none=True)
+        with torch.autocast(device_type=self.settings.amp_device, enabled=self.settings.use_amp):
+            reconstruction, z_mu, _, recons_loss, p_loss, klloss, loss_g = self._forward_and_losses(
+                inputs,
+                tumor_mask,
+                phase=phase,
+            )
+            gen_adv = self.adversarial.generator_loss(reconstruction)
 
-    def _compute_recon_losses(
-        self,
-        inputs,
-        reconstruction,
-        tumor_mask,
-        kidney_mask=None,
-        wt=1.0,
-        wk=0.5,
-    ):
-        l1 = torch.abs(reconstruction.float() - inputs.float())
+        self.scaler_g.scale(loss_g).backward()
+        self.scaler_g.unscale_(self.optimizer_g)
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.settings.grad_clip_norm)
+        self.scaler_g.step(self.optimizer_g)
+        self.scaler_g.update()
 
-        tumor_mask = tumor_mask.float()
+        loss_d = self.adversarial.update_discriminator(inputs, reconstruction)
+        self.monitoring.record_batch("train", batch, inputs, reconstruction, multilabel_mask, z_mu)
 
-        if kidney_mask is None:
-            kidney_mask = torch.zeros_like(tumor_mask)
-        kidney_mask = kidney_mask.float() * (1.0 - tumor_mask)
+        metrics = self._make_loss_metrics(loss_g, loss_d, recons_loss, klloss, p_loss, gen_adv)
+        with torch.no_grad():
+            metrics.update(self._compute_quality_metrics(reconstruction, inputs))
+        return metrics
 
-        l_t = self.masked_mean(l1, tumor_mask)
-        l_k = self.masked_mean(l1, kidney_mask)
+    def validation_step(self, epoch: int, batch: Any) -> Dict[str, float]:
+        inputs, phase, multilabel_mask, tumor_mask = self._unpack_batch(batch)
+        self.model.eval()
 
-        recons_loss = wt * l_t + wk * l_k 
-        
-        p_loss = self.loss_perceptual(reconstruction.float(),inputs.float())
+        with torch.no_grad():
+            with torch.autocast(device_type=self.settings.amp_device, enabled=self.settings.use_amp):
+                reconstruction, z_mu, _, recons_loss, p_loss, klloss, loss_g = self._forward_and_losses(
+                    inputs,
+                    tumor_mask,
+                    phase=phase,
+                )
+                gen_adv = self.adversarial.generator_loss(reconstruction)
 
-        return recons_loss, p_loss
+            loss_d = self.adversarial.discriminator_loss(inputs, reconstruction) if self.adversarial.active else torch.tensor(
+                0.0,
+                device=inputs.device,
+            )
+            self.monitoring.record_batch("val", batch, inputs, reconstruction, multilabel_mask, z_mu)
+
+            metrics = self._make_loss_metrics(loss_g, loss_d, recons_loss, klloss, p_loss, gen_adv)
+            metrics.update(self._compute_quality_metrics(reconstruction, inputs))
+            return metrics
+
+    def step_schedulers(self, epoch: int) -> None:
+        self.scheduler_g.step()
+        self.logger.add_scalar("LR/generator", self.optimizer_g.param_groups[0]["lr"], epoch)
+        self.adversarial.step_scheduler(self.logger, epoch)
+
+    def on_epoch_start(self, epoch: int, is_train: bool) -> None:
+        self.adversarial.on_epoch_start(epoch)
+        self.monitoring.on_epoch_start(epoch, is_train)
+
+    def on_epoch_end(self, epoch: int, train_metrics: Dict[str, float], val_metrics: Dict[str, float]) -> None:
+        self.monitoring.on_epoch_end(epoch)
+        super().on_epoch_end(epoch, train_metrics, val_metrics)
+
+    def _checkpoint_modules(self) -> Dict[str, torch.nn.Module]:
+        modules = {"model": self.model}
+        modules.update(self.adversarial.checkpoint_modules())
+        return modules
+
+    def _checkpoint_optimizers(self) -> Dict[str, Any]:
+        optimizers = {"optimizer_g": self.optimizer_g}
+        optimizers.update(self.adversarial.checkpoint_optimizers())
+        return optimizers
+
+    def _checkpoint_schedulers(self) -> Dict[str, Any]:
+        schedulers = {"scheduler_g": self.scheduler_g}
+        schedulers.update(self.adversarial.checkpoint_schedulers())
+        return schedulers
+
+    def _checkpoint_scalers(self) -> Dict[str, Any]:
+        scalers = {"scaler_g": self.scaler_g}
+        scalers.update(self.adversarial.checkpoint_scalers())
+        return scalers
+
+    def _create_grad_scaler(self) -> GradScaler:
+        try:
+            return GradScaler(self.settings.amp_device, enabled=self.settings.use_amp)
+        except TypeError:  # pragma: no cover - torch version dependent
+            return GradScaler(enabled=self.settings.use_amp)
+
+    def _initialize_epoch_metrics(self) -> Dict[str, float]:
+        metrics = {"loss": 0.0, "recon": 0.0, "kl": 0.0, "PSNR_count": 0}
+        for metric_name in self.metrics:
+            metrics[metric_name] = 0.0
+        return metrics
+
+    def _average_epoch_metrics(self, epoch_metrics: Dict[str, float], n_batches: int) -> Dict[str, float]:
+        quality_keys = set(self.metrics.keys())
+        psnr_computed = epoch_metrics.get("PSNR_count", 0) > 0
+        averaged: Dict[str, float] = {}
+
+        for key, value in epoch_metrics.items():
+            if key == "PSNR_count" or (key in quality_keys and not psnr_computed):
+                continue
+            averaged[key] = value / max(1, n_batches)
+
+        if psnr_computed and "PSNR" in epoch_metrics:
+            averaged["PSNR"] = epoch_metrics["PSNR"] / epoch_metrics["PSNR_count"]
+        return averaged
+
+    def _unpack_batch(self, batch: Any) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        inputs = batch["ct"]["data"].to(self.device)
+        phase = batch["phase"].to(self.device)
+        multilabel_mask = batch["mask"]["data"].to(self.device)
+        tumor_mask = (multilabel_mask == 2).float()
+
+        if inputs.shape != tumor_mask.shape:
+            raise ValueError(f"Shape mismatch: {inputs.shape} vs {tumor_mask.shape}")
+        return inputs, phase, multilabel_mask, tumor_mask
 
     def _forward_and_losses(
         self,
         inputs: torch.Tensor,
         tumor_mask: torch.Tensor,
-        phase: Optional[torch.Tensor] = None
-        ):
+        phase: Optional[torch.Tensor] = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         reconstruction, z_mu, z_sigma = self.model(inputs, phase=phase)
         recons_loss, p_loss = self._compute_recon_losses(inputs, reconstruction, tumor_mask)
         klloss = self.kl_loss(z_mu, z_sigma)
-        loss_g = recons_loss + self.kl_w * klloss + self.perc_w * p_loss
+        loss_g = recons_loss + self.settings.kl_weight * klloss + self.settings.perceptual_weight * p_loss
         return reconstruction, z_mu, z_sigma, recons_loss, p_loss, klloss, loss_g
 
-    def _gen_adv_loss(self, reconstruction: torch.Tensor, epoch: int) -> torch.Tensor:
-        if epoch < self.adv_warmup_epochs:
-            return torch.tensor(0.0, device=reconstruction.device)
-        self._set_discriminator_requires_grad(False)
-        # MultiScalePatchDiscriminator returns (out_list, intermediate_features)
-        out_list, _ = self.discriminator(reconstruction.contiguous().float())
-        # Average adversarial loss across all scales
-        adv_losses = [self.adv_loss(logits, target_is_real=True, for_discriminator=False) for logits in out_list]
-        gen_adv = torch.stack(adv_losses).sum() / len(adv_losses)
-        self._set_discriminator_requires_grad(True)
-        return gen_adv
-
-    def _discriminator_loss(self, inputs: torch.Tensor, reconstruction: torch.Tensor) -> torch.Tensor:
-        # MultiScalePatchDiscriminator returns (out_list, intermediate_features)
-        out_fake, _ = self.discriminator(reconstruction.contiguous().detach())
-        out_real, _ = self.discriminator(inputs.contiguous().detach())
-        # Average loss across all scales
-        loss_d_fake = sum([self.adv_loss(logits, target_is_real=False, for_discriminator=True) for logits in out_fake]) / len(out_fake)
-        loss_d_real = sum([self.adv_loss(logits, target_is_real=True, for_discriminator=True) for logits in out_real]) / len(out_real)
-        return self.adv_w * 0.5 * (loss_d_fake + loss_d_real)
-
-    def _update_discriminator(self, inputs: torch.Tensor, reconstruction: torch.Tensor, epoch: int) -> torch.Tensor:
-        if epoch < self.adv_warmup_epochs:
-            return torch.tensor(0.0, device=inputs.device)
-        self.optimizer_d.zero_grad(set_to_none=True)
-        loss_d = self._discriminator_loss(inputs, reconstruction)
-        loss_d.backward()
-        self.optimizer_d.step()
-        return loss_d
-
-    def _store_sample(self, split, inputs, reconstruction, mask):
-        rand_idx = torch.randint(0, inputs.shape[0], (1,)).item()
-        self.samples[split] = {
-            "input": inputs[rand_idx].detach().cpu(),
-            "recon": reconstruction[rand_idx].detach().cpu(),
-            "mask": mask[rand_idx].detach().cpu(),
-        }
-    
-    @torch.no_grad()
-    def _extract_embeddings(self, loader, max_batches: int):
-        self.model.eval()
-
-        E, Y = [], []
-        n = 0
-        for batch in loader:
-            x = batch["ct"]["data"].to(self.device)
-            y = [map_label_to_category(lbl) for lbl in batch["label"]]
-            _, z_mu, _ = self.model(x)
-            e = z_mu.mean(dim=(2,3,4))
-            e = F.normalize(e, dim=1)
-
-            E.append(e.cpu())
-            Y.append(torch.as_tensor(y))
-
-            n += 1
-            if n >= max_batches:
-                break
-
-        E = torch.cat(E, dim=0).float()
-        Y = torch.cat(Y, dim=0)
-        return E, Y
-    
-    def _linear_probe_classification(self, Etr, Ytr, Eval, Yval, num_epochs=50, lr=1e-2, l2=1e-4):
-        # binaria vs multiclase
-        y_unique = torch.unique(Ytr)
-        is_binary = (len(y_unique) == 2)
-
-        in_dim = Etr.shape[1]
-        if is_binary:
-            head = torch.nn.Linear(in_dim, 1).to(self.device)
-            loss_fn = torch.nn.BCEWithLogitsLoss()
-            Ytr_t = Ytr.float().to(self.device).view(-1, 1)
-            Yval_t = Yval.float().to(self.device).view(-1, 1)
+    def _compute_recon_losses(
+        self,
+        inputs: torch.Tensor,
+        reconstruction: torch.Tensor,
+        mask: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.settings.use_masked_loss:
+            recon_loss = self._weighted_masked_loss(inputs, reconstruction, mask)
         else:
-            n_classes = int(torch.max(Ytr).item() + 1)
-            head = torch.nn.Linear(in_dim, n_classes).to(self.device)
-            loss_fn = torch.nn.CrossEntropyLoss()
-            Ytr_t = Ytr.long().to(self.device)
-            Yval_t = Yval.long().to(self.device)
+            recon_loss = self.l1_loss(reconstruction, inputs)
+        return recon_loss, self.loss_perceptual(reconstruction, inputs)
 
-        opt = torch.optim.AdamW(head.parameters(), lr=lr, weight_decay=l2)
+    def _weighted_masked_loss(
+        self,
+        inputs: torch.Tensor,
+        reconstruction: torch.Tensor,
+        mask: torch.Tensor,
+    ) -> torch.Tensor:
+        l1_losses = F.l1_loss(inputs, reconstruction, reduction="none")
+        tumor_mask = mask.float()
+        non_tumor_mask = 1.0 - tumor_mask
 
-        Etr_d = Etr.to(self.device)
-        Eval_d = Eval.to(self.device)
+        tumor_loss = (l1_losses * tumor_mask).sum() / tumor_mask.sum().clamp_min(1e-6)
+        non_tumor_loss = (l1_losses * non_tumor_mask).sum() / non_tumor_mask.sum().clamp_min(1e-6)
+        return (self.settings.tumor_weight * tumor_loss) + (self.settings.non_tumor_weight * non_tumor_loss)
 
-        head.train()
-        for _ in range(num_epochs):
-            opt.zero_grad(set_to_none=True)
-            logits = head(Etr_d)
-            loss = loss_fn(logits, Ytr_t)
-            loss.backward()
-            opt.step()
+    def kl_loss(self, z_mu: torch.Tensor, z_sigma: torch.Tensor) -> torch.Tensor:
+        klloss = 0.5 * torch.sum(
+            z_mu.pow(2) + z_sigma.pow(2) - torch.log(z_sigma.pow(2).clamp(min=1e-6)) - 1,
+            dim=[1, 2, 3, 4],
+        )
+        return torch.sum(klloss) / klloss.shape[0]
 
-        head.eval()
-        with torch.no_grad():
-            logits = head(Eval_d)
-            if is_binary:
-                probs = torch.sigmoid(logits).squeeze(1).cpu()
-                preds = (probs > 0.5).long()
-                acc = (preds == Yval.long()).float().mean().item()
-                return {"probe_acc": acc}
-            else:
-                preds = torch.argmax(logits, dim=1).cpu()
-                acc = (preds == Yval.long()).float().mean().item()
-                return {"probe_acc": acc}
-    
-    # def _update_optim_betas_adv(self) -> None:
-    #     # Example: switch to more stable betas for adversarial training
-    #     new_betas_g = (0.5, 0.999)
-    #     new_betas_d = (0.0, 0.99)
-    #     for param_group in self.optimizer_g.param_groups:
-    #         param_group['betas'] = new_betas_g
-    #     for param_group in self.optimizer_d.param_groups:
-    #         param_group['betas'] = new_betas_d
-            
-    def train_step(self, epoch, batch: Any) -> Dict[str, float]:
-        inputs = batch["ct"]["data"].to(self.device)
-        phase = batch["phase"].to(self.device)
-        multilabel_mask = batch['mask']['data'].to(self.device)
-        # Extract binary tumor mask: label==2
-        tumor_mask = (multilabel_mask == 2).float()
-        # Verify CT and mask patches have matching shapes
-        assert inputs.shape == tumor_mask.shape, \
-            f"CT and tumor mask patch shape mismatch: {inputs.shape} vs {tumor_mask.shape}"
-        
-        if epoch == self.adv_warmup_epochs:
-            self.adv_running = True
-            # self._update_optim_betas_adv()
-        self.optimizer_g.zero_grad(set_to_none=True)
-
-        reconstruction, z_mu, z_sigma, recons_loss, p_loss, klloss, loss_g = self._forward_and_losses(inputs, tumor_mask, phase=phase)
-
-        gen_adv = self._gen_adv_loss(reconstruction, epoch)
-
-        loss_g.backward()
-        self.optimizer_g.step()
-        # --------------------
-        # Discriminator update
-        # --------------------
-        loss_d = self._update_discriminator(inputs, reconstruction, epoch)
-        
-        # Collect latents for UMAP (only z_mu, not variance)
-        if self.collect_latents and hasattr(self, '_collect_this_epoch'):
-            if self._collect_this_epoch:
-                self.latent_collection['train'].append(z_mu.detach().cpu().numpy())
-                labels = [map_label_to_category(lbl) for lbl in batch['label']]
-                self.label_collection['train'].append(np.array(labels))
-    
-        # Store random training sample for visualization
-        if self.collect_img:
-            self._store_sample("train", inputs, reconstruction, multilabel_mask)
-
-        metrics = {
+    def _make_loss_metrics(
+        self,
+        loss_g: torch.Tensor,
+        loss_d: torch.Tensor,
+        recon_loss: torch.Tensor,
+        klloss: torch.Tensor,
+        perceptual_loss: torch.Tensor,
+        gen_adv: torch.Tensor,
+    ) -> Dict[str, float]:
+        return {
             "loss": loss_g.item(),
             "loss_d": loss_d.item(),
-            "recon": recons_loss.item(),
+            "recon": recon_loss.item(),
             "kl": klloss.item(),
-            "perceptual": p_loss.item(),
+            "perceptual": perceptual_loss.item(),
             "g_adv": gen_adv.item(),
         }
-        metrics.update(self._compute_quality_metrics(reconstruction, inputs))
-        return metrics
-
-    def validation_step(self, epoch, batch: Any) -> Dict[str, float]:
-        inputs = batch["ct"]["data"].to(self.device)
-        phase = batch["phase"].to(self.device)
-        multilabel_mask = batch['mask']['data'].to(self.device)
-        # Extract binary tumor mask: label==2
-        tumor_mask = (multilabel_mask == 2).float()
-        # Verify CT and mask patches have matching shapes
-        assert inputs.shape == tumor_mask.shape, \
-            f"CT and tumor mask patch shape mismatch: {inputs.shape} vs {tumor_mask.shape}"
-        
-        self.model.eval()
-        # self.discriminator.eval()
-
-        with torch.no_grad():
-            reconstruction, z_mu, z_sigma, recons_loss, p_loss, klloss, loss_g = self._forward_and_losses(inputs, tumor_mask, phase=phase)
-
-            gen_adv = self._gen_adv_loss(reconstruction, epoch)
-            loss_d = self._discriminator_loss(inputs, reconstruction) if epoch > self.adv_warmup_epochs else torch.tensor(0.0, device=inputs.device)
-
-            metrics = {
-                "loss": loss_g.item(),
-                "loss_d": loss_d.item(),
-                "recon": recons_loss.item(),
-                "kl": klloss.item(),
-                "perceptual": p_loss.item(),
-                "g_adv": gen_adv.item(),
-            }
-            metrics.update(self._compute_quality_metrics(reconstruction, inputs))
-            
-            # Logging samples for visualization
-            if self.collect_img:
-                self._store_sample("val", inputs, reconstruction, multilabel_mask)
-
-
-            if self.collect_latents and hasattr(self, "_collect_this_epoch") and self._collect_this_epoch:
-                self.latent_collection["val"].append(z_mu.detach().cpu().numpy())
-                labels = [map_label_to_category(lbl) for lbl in batch["label"]]
-                self.label_collection["val"].append(np.array(labels))
-                    
-        return metrics
-
-    
-    def _initialize_epoch_metrics(self) -> Dict[str, float]:
-        """Initialize metrics dictionary for epoch."""
-        metrics = {"loss": 0.0, "recon": 0.0, "kl": 0.0, "PSNR_count": 0}
-        for metric_name in self.metrics:
-            metrics[metric_name] = 0.0
-        return metrics
-    
-    def _average_epoch_metrics(self, epoch_metrics: Dict[str, float], n_batches: int) -> Dict[str, float]:
-        """Average accumulated metrics over the epoch."""
-        averaged_metrics = {k: v / max(1, n_batches) for k, v in epoch_metrics.items() if k != 'PSNR_count'}
-        if 'PSNR' in epoch_metrics and epoch_metrics['PSNR_count'] > 0:
-            averaged_metrics['PSNR'] = epoch_metrics['PSNR'] / epoch_metrics['PSNR_count']
-        return averaged_metrics
-
-    def step_schedulers(self, epoch: int) -> None:
-        """Step LR schedulers for G and D (epoch-based)."""
-        self.scheduler_g.step()
-        self.logger.add_scalar("LR/generator", self.optimizer_g.param_groups[0]["lr"], epoch)
-        if self.adv_running:
-            self.scheduler_d.step()
-            self.logger.add_scalar("LR/discriminator", self.optimizer_d.param_groups[0]["lr"], epoch)
-
-    def on_fit_start(self) -> None:
-        """Hook called before training starts."""
-        super().on_fit_start()
-        self._collect_this_epoch = False
-        self.collect_img = False
-        
-    def on_epoch_start(self, epoch: int, is_train: bool) -> None:
-        """Hook called at the start of each epoch."""
-        # Determine if we should collect latents this epoch
-        umap_interval = getattr(self.cfg.trainer, 'umap_log_interval', 10)
-        self._collect_this_epoch = self.collect_latents and (epoch % umap_interval == 0)
-        image_log_interval = getattr(self.cfg.trainer, 'image_log_interval', 5)
-
-        self.collect_img = (epoch % image_log_interval == 0)
-        
-        # Clear previous collections if starting new collection
-        if self._collect_this_epoch:
-            split = 'train' if is_train else 'val'
-            self.latent_collection[split] = []
-            self.label_collection[split] = []
-    
-    def on_epoch_end(
-        self, 
-        epoch: int, 
-        train_metrics: Dict[str, float], 
-        val_metrics: Dict[str, float]
-    ) -> None:
-        """Hook for epoch end - log images, UMAP, and call callbacks."""
-        # Log sample images every N epochs
-        image_log_interval = getattr(self.cfg.trainer, 'image_log_interval', 5)
-        if epoch % image_log_interval == 0:
-            if self.samples["val"]:
-                self._log_sample_images(epoch, tag="val")
-            if self.samples["train"]:
-                self._log_sample_images(epoch, tag="train")
-        
-        # Log UMAP if latents were collected
-        if self._collect_this_epoch and self.collect_latents:
-            self._log_latent_umap(epoch)
-        
-        # ---- PROBE ----
-        probe_interval = getattr(self.cfg.trainer, "probe_interval", 0)
-        if probe_interval and (epoch % probe_interval == 0):
-            max_batches = getattr(self.cfg.trainer, "probe_max_batches", 20)
-            probe_epochs = getattr(self.cfg.trainer, "probe_epochs", 50)
-            probe_lr = getattr(self.cfg.trainer, "probe_lr", 1e-2)
-            probe_l2 = getattr(self.cfg.trainer, "probe_l2", 1e-4)
-
-            Etr, Ytr = self._extract_embeddings(self.dataloaders["train"], max_batches)
-            Eval, Yval = self._extract_embeddings(self.dataloaders["val"], max_batches)
-
-            probe_metrics = self._linear_probe_classification(Etr, Ytr, Eval, Yval,
-                                                            num_epochs=probe_epochs, lr=probe_lr, l2=probe_l2)
-
-            for k, v in probe_metrics.items():
-                self.logger.add_scalar(f"probe_{k}", v, epoch)
-
-
-        # callbacks base
-        super().on_epoch_end(epoch, train_metrics, val_metrics)
-    
-    def _log_latent_umap(self, epoch: int) -> None:
-        """Log UMAP visualization of latent space."""
-        for split in ['train', 'val']:
-            if len(self.latent_collection[split]) > 0:
-                latents = self.latent_collection[split]
-                labels = self.label_collection[split] if len(self.label_collection[split]) > 0 else None
-                
-                self.logger.log_latent_umap(
-                    latents=latents,
-                    labels=labels,
-                    step=epoch,
-                    tag=split
-                )
-                
-                # Clear after logging to save memory
-                self.latent_collection[split] = []
-                self.label_collection[split] = []
-    
-    def _log_sample_images(self, epoch: int, tag: str = "val") -> None:
-        sample = self.samples.get(tag, {})
-        if not sample:
-            return
-        self.logger.log_axial_figure(
-            sample["input"],
-            sample["recon"],
-            step=epoch,
-            tag=tag,
-            norm_stats=self.norm_stats,
-            mask=sample["mask"],
-        )
-
-

@@ -2,12 +2,15 @@
 Training Orchestrator - Coordinates the entire training process.
 Follows Facade Pattern and Single Responsibility Principle.
 """
+import logging
+
 from omegaconf import DictConfig, OmegaConf
 
+from ..utils.stdout_logger import setup_stdout_logging
 from .config_manager import ConfigManager
 from .setup_builder import SetupBuilderDirector
-from ..utils.stdout_logger import setup_stdout_logging
-import logging
+
+logger = logging.getLogger(__name__)
 
 class TrainingOrchestrator:
     """
@@ -69,7 +72,7 @@ class TrainingOrchestrator:
         """Cleanup resources."""
         if self.setup and self.setup.logger:
             self.setup.logger.close()
-            print("Logger closed.")
+            logger.debug("Logger closed.")
     
     def run(self) -> None:
         """Run complete training workflow."""

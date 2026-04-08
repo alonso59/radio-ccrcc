@@ -3,8 +3,7 @@ from typing import Any, Dict, List, Literal, Optional
 import numpy as np
 import torch
 from torch import nn
-import drunet_components as B
-from torchinfo import summary
+from . import drunet_components as B
 
 
 class GaussianFourierProjection(nn.Module):
@@ -53,8 +52,10 @@ class DRUNet(torch.nn.Module):
         """
         super().__init__()
 
-        assert dim in {2, 3}, "dim must be either 2 or 3"
-        assert len(nc) >= 2, "nc must contain at least two levels (encoder scale(s) + body)"
+        if dim not in {2, 3}:
+            raise ValueError(f"dim must be 2 or 3, got {dim}")
+        if len(nc) < 2:
+            raise ValueError("nc must contain at least two levels (encoder scale(s) + body)")
         self.dim = dim
         self.nc = nc
         self.nb = nb
@@ -159,51 +160,3 @@ class DRUNet(torch.nn.Module):
         return x
 
 
-if __name__ == "__main__":
-    # Example usage with 4-level net:
-    model = DRUNet(
-        dim=3,
-        nc=[16, 32, 64, 128],
-        nb=2,
-        bias=True,
-        num_cond_features=128,
-        in_channels=1,
-        out_channels=1,
-        label_dim=0,
-        label_dropout=0.0,
-        embedding={
-            "in_features": 1,
-            "hidden_features": 256,
-            "out_features": 128,
-        },
-        norm_type="instance",
-    )
-
-    x = torch.randn(2, 1, 128, 128, 128)
-    t = torch.randn(2, 1)
-    out = model(x, t)
-    print("output shape:", out.shape)  # Expect (2, 1, 128, 128, 128)
-
-    # Example usage with 3-level net (fewer scales):
-    model_small = DRUNet(
-        dim=3,
-        nc=[32, 64, 128],
-        nb=2,
-        bias=True,
-        num_cond_features=128,
-        in_channels=1,
-        out_channels=1,
-        label_dim=0,
-        label_dropout=0.0,
-        embedding={
-            "in_features": 1,
-            "hidden_features": 256,
-            "out_features": 128,
-        },
-        norm_type="instance",
-    )
-    x2 = torch.randn(2, 1, 128, 128, 128)
-    out2 = model_small(x2, t)
-    print("output shape small:", out2.shape)
-
-    summary(model, input_data=(x, t), col_names=["input_size", "output_size", "num_params", "trainable"], depth=4)

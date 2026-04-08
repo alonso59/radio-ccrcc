@@ -25,7 +25,7 @@ import SimpleITK as sitk
 from tqdm import tqdm
 
 from .discover import discover_files
-from .fingerprint import _collect_bbox_intensities, _intensity_stats, _shape_stats
+from .fingerprint import _collect_raw_intensities, _collect_windowed_intensities, _intensity_stats, _shape_stats
 from .processing import (
     generate_dual_masks,
     separate_kidneys,
@@ -652,7 +652,8 @@ def run(cfg: Dict) -> Dict:
 
     bbox_labels = cfg.get("BBOX_LABELS", [1, 2, 3])
     hu_range = cfg.get("HU_RANGE", [-200, 300])
-    fp_intensities: List[np.ndarray] = []
+    fp_raw_intensities: List[np.ndarray] = []
+    fp_windowed_intensities: List[np.ndarray] = []
     fp_shapes: List[list] = []
     fp_total_vox = 0
     fp_filtered_vox = 0
@@ -672,11 +673,12 @@ def run(cfg: Dict) -> Dict:
                 seg_arr = sitk.GetArrayFromImage(sd["seg"])
                 bb_arr = np.isin(seg_arr, bbox_labels).astype(np.uint8)
                 fp_shapes.append(list(img_arr.shape))
-                bbox_vals = img_arr[bb_arr > 0].flatten()
-                fp_total_vox += len(bbox_vals)
-                filt = _collect_bbox_intensities(img_arr, bb_arr, hu_range[0], hu_range[1])
-                fp_filtered_vox += len(filt)
-                fp_intensities.append(filt)
+                raw = _collect_raw_intensities(img_arr, bb_arr)
+                fp_total_vox += len(raw)
+                fp_raw_intensities.append(raw)
+                windowed = _collect_windowed_intensities(img_arr, bb_arr, hu_range[0], hu_range[1])
+                fp_filtered_vox += len(windowed)
+                fp_windowed_intensities.append(windowed)
 
         except Exception as exc:
             failed.append(key)
@@ -712,16 +714,20 @@ def run(cfg: Dict) -> Dict:
 
     # 7 ─ Fingerprint
     print("[7/7] Writing dataset_fingerprint.json…")
-    intensities = np.concatenate(fp_intensities) if fp_intensities else np.array([], dtype=np.float32)
-    i_stats = _intensity_stats(intensities)
+    raw_concat = np.concatenate(fp_raw_intensities) if fp_raw_intensities else np.array([], dtype=np.float32)
+    windowed_concat = np.concatenate(fp_windowed_intensities) if fp_windowed_intensities else np.array([], dtype=np.float32)
+    raw_stats = _intensity_stats(raw_concat)
+    windowed_stats = _intensity_stats(windowed_concat)
     fingerprint = {
-        "foreground_intensity": {"channel_0": i_stats},
+        "version": 3,
+        "foreground_intensity": {"channel_0": raw_stats},
+        "windowed_intensity": {"channel_0": windowed_stats},
         "normalization": {
-            "method": "iqr",
-            "p25": i_stats.get("p25"),
-            "p75": i_stats.get("p75"),
-            "median": i_stats.get("median"),
-            "iqr": i_stats.get("iqr"),
+            "method": "window_rescale",
+            "window_min": float(hu_range[0]),
+            "window_max": float(hu_range[1]),
+            "output_min": -1.0,
+            "output_max": 1.0,
         },
         "shape_statistics": _shape_stats(fp_shapes),
         "voxel_info": {

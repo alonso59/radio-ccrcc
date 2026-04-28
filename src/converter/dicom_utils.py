@@ -11,9 +11,11 @@ import io
 import os
 import re
 import sys
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+from zipfile import ZipFile
 
 import numpy as np
 import SimpleITK as sitk
@@ -167,7 +169,8 @@ def detect_dataset_type(root: Path) -> str:
                 pid = get_tag(reader, "0010|0020")
                 if re.match(r"TCGA-[A-Z0-9]{2}-[A-Z0-9]{4}", pid):
                     return "tcga"
-                if pid.startswith("Anonym_") or re.match(r"^\d+$", pid):
+                pid_key = normalize_patient_key(pid)
+                if re.match(r"^ANONYM-[A-Z0-9]+$", pid_key) or re.match(r"^\d+$", pid_key):
                     return "ukbonn"
                 if "KiTS" in pid or pid.startswith("case_"):
                     return "kits"
@@ -200,6 +203,39 @@ def _sanitize(pid: str) -> str:
     return s or "UNKNOWN"
 
 
+def _clean_cell(value: object) -> str:
+    """Convert CSV/XLSX cell values to stable string values."""
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if text.lower() in {"nan", "none"}:
+        return ""
+    if re.fullmatch(r"\d+\.0", text):
+        return text[:-2]
+    return text
+
+
+def normalize_patient_key(raw: object) -> str:
+    """Normalize patient identifiers for cross-source matching.
+
+    UKBonn labels use ``Anonym_XXXXXX`` while DICOM headers use
+    ``ANONYM-XXXXXX``. This helper is intentionally used for lookups only; the
+    converter still preserves the original extracted patient ID in manifests.
+    """
+    text = _clean_cell(raw)
+    if not text:
+        return ""
+
+    text = _sanitize(text)
+    anonym = re.match(r"(?i)^anonym[-_]?(.+)$", text)
+    if anonym:
+        token = re.sub(r"^[-_]+", "", anonym.group(1)).upper()
+        return f"ANONYM-{token}"
+    if re.fullmatch(r"\d+", text):
+        return text
+    return text.upper()
+
+
 def extract_patient_id(
     reader: sitk.ImageSeriesReader, file_path: Optional[str] = None,
 ) -> Tuple[str, str]:
@@ -218,7 +254,7 @@ def extract_patient_id(
         for part in reversed(parts):
             if re.match(r"TCGA-[A-Z0-9]{2}-[A-Z0-9]{4}", part):
                 return part, "directory_tcga"
-            if part.startswith("Anonym_"):
+            if re.match(r"(?i)^anonym[-_]", part):
                 return part, "directory_ukbonn"
             if re.match(r"case_\d+", part):
                 return part, "directory_kits"
@@ -522,11 +558,171 @@ def embed_metadata(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 15. CLASSIFICATION CSV LOADER
+# 15. CLASSIFICATION / LABEL LOADERS
 # ═══════════════════════════════════════════════════════════════════════════
 
+_UKBONN_LABEL_COLUMNS = {"Anonym", "ID", "Manual Label", "LB", "HB", "SN"}
+
+
+def _is_xlsx_file(path: Path) -> bool:
+    try:
+        with open(path, "rb") as f:
+            return f.read(4) == b"PK\x03\x04"
+    except OSError:
+        return False
+
+
+def _cell_ref_to_index(cell_ref: str) -> int:
+    match = re.match(r"([A-Z]+)", cell_ref or "")
+    if not match:
+        return 0
+    idx = 0
+    for char in match.group(1):
+        idx = idx * 26 + ord(char) - ord("A") + 1
+    return idx - 1
+
+
+def _read_xlsx_rows(path: Path) -> List[dict]:
+    """Read the first XLSX worksheet into a list of string dictionaries."""
+    ns = {"a": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    with ZipFile(path) as zf:
+        shared: List[str] = []
+        if "xl/sharedStrings.xml" in zf.namelist():
+            root = ET.fromstring(zf.read("xl/sharedStrings.xml"))
+            for item in root.findall("a:si", ns):
+                shared.append("".join(t.text or "" for t in item.findall(".//a:t", ns)))
+
+        sheet_names = sorted(
+            name
+            for name in zf.namelist()
+            if name.startswith("xl/worksheets/sheet") and name.endswith(".xml")
+        )
+        if not sheet_names:
+            return []
+
+        root = ET.fromstring(zf.read(sheet_names[0]))
+        table: List[List[str]] = []
+        for row in root.findall(".//a:sheetData/a:row", ns):
+            values: List[str] = []
+            for cell in row.findall("a:c", ns):
+                idx = _cell_ref_to_index(cell.attrib.get("r", ""))
+                while len(values) <= idx:
+                    values.append("")
+
+                cell_type = cell.attrib.get("t")
+                value = ""
+                if cell_type == "inlineStr":
+                    value = "".join(t.text or "" for t in cell.findall(".//a:t", ns))
+                else:
+                    raw_value = cell.find("a:v", ns)
+                    if raw_value is not None and raw_value.text is not None:
+                        if cell_type == "s":
+                            value = shared[int(raw_value.text)]
+                        else:
+                            value = raw_value.text
+                values[idx] = _clean_cell(value)
+            if any(values):
+                table.append(values)
+
+    if not table:
+        return []
+
+    headers = [_clean_cell(h) for h in table[0]]
+    while headers and not headers[-1]:
+        headers.pop()
+    rows: List[dict] = []
+    for values in table[1:]:
+        row = {
+            header: _clean_cell(values[idx] if idx < len(values) else "")
+            for idx, header in enumerate(headers)
+            if header
+        }
+        if any(row.values()):
+            rows.append(row)
+    return rows
+
+
+def _read_table_rows(path: Path) -> List[dict]:
+    if _is_xlsx_file(path):
+        return _read_xlsx_rows(path)
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        return [
+            {str(k): _clean_cell(v) for k, v in row.items() if k is not None}
+            for row in csv.DictReader(f)
+        ]
+
+
+def _find_column(candidates: List[str], headers: List[str]) -> Optional[str]:
+    for candidate in candidates:
+        if candidate in headers:
+            return candidate
+    return None
+
+
+def _looks_like_ukbonn_labels(rows: List[dict]) -> bool:
+    return bool(rows) and _UKBONN_LABEL_COLUMNS.issubset(set(rows[0].keys()))
+
+
+def load_ukbonn_labels(csv_path: Optional[Path]) -> Tuple[dict, dict]:
+    """Load UKBonn label metadata keyed by normalized patient aliases.
+
+    The source file may be a real CSV or an XLSX workbook with a .csv suffix.
+    Labels are metadata only; they do not update TCGA-style group values.
+    """
+    label_metadata: dict[str, dict] = {}
+    summary: dict = {
+        "label_file": str(csv_path) if csv_path else "",
+        "labels_loaded": 0,
+        "label_keys_loaded": 0,
+        "duplicate_label_keys": [],
+        "label_rows": [],
+    }
+
+    if csv_path is None or not csv_path.exists():
+        return label_metadata, summary
+
+    rows = _read_table_rows(csv_path)
+    if not _looks_like_ukbonn_labels(rows):
+        return label_metadata, summary
+
+    duplicate_keys: set[str] = set()
+    for row_idx, row in enumerate(rows, start=1):
+        record = {
+            "ukb_anonym": _clean_cell(row.get("Anonym")),
+            "ukb_id": _clean_cell(row.get("ID")),
+            "manual_label": _clean_cell(row.get("Manual Label")),
+            "lb": _clean_cell(row.get("LB")),
+            "hb": _clean_cell(row.get("HB")),
+            "sn": _clean_cell(row.get("SN")),
+            "label_source": Path(csv_path).name,
+            "_label_row_id": f"ukbonn:{row_idx}",
+        }
+        summary["label_rows"].append({
+            "row": row_idx,
+            "ukb_anonym": record["ukb_anonym"],
+            "ukb_id": record["ukb_id"],
+            "manual_label": record["manual_label"],
+        })
+
+        aliases = [
+            normalize_patient_key(record["ukb_anonym"]),
+            normalize_patient_key(record["ukb_id"]),
+        ]
+        for alias in [a for a in aliases if a]:
+            existing = label_metadata.get(alias)
+            if existing and existing.get("_label_row_id") != record["_label_row_id"]:
+                duplicate_keys.add(alias)
+                continue
+            label_metadata[alias] = record
+
+    summary["labels_loaded"] = len(rows)
+    summary["label_keys_loaded"] = len(label_metadata)
+    summary["duplicate_label_keys"] = sorted(duplicate_keys)
+    return label_metadata, summary
+
+
 def load_classifications(csv_path: Optional[Path]) -> Tuple[dict, dict]:
-    """Load patient → group and patient → case_id maps from CSV.
+    """Load patient → group and patient → case_id maps from CSV/XLSX.
 
     Returns (class_map, case_map).  Both may be empty dicts.
     """
@@ -536,30 +732,54 @@ def load_classifications(csv_path: Optional[Path]) -> Tuple[dict, dict]:
     if csv_path is None or not csv_path.exists():
         return class_map, case_map
 
-    with open(csv_path, newline="") as f:
-        rows = list(csv.DictReader(f))
+    rows = _read_table_rows(csv_path)
     if not rows:
         return class_map, case_map
 
     headers = list(rows[0].keys())
 
-    def _find(candidates: list[str]) -> Optional[str]:
-        for c in candidates:
-            if c in headers:
-                return c
-        return None
-
-    pid_col = _find(["TCGA ID", "patient_id", "PatientID", "ID"])
-    cls_col = _find(["Vessel evaluation", "class", "Class", "Label", "group", "Group"])
-    cid_col = _find(["case_id", "CaseID", "Case"])
+    pid_col = _find_column(["TCGA ID", "patient_id", "PatientID", "ID"], headers)
+    cls_col = _find_column(["Vessel evaluation", "class", "Class", "Label", "group", "Group"], headers)
+    cid_col = _find_column(["case_id", "CaseID", "Case"], headers)
 
     if not pid_col or not cls_col:
         return class_map, case_map
 
     for row in rows:
-        pid = row[pid_col].strip()
-        class_map[pid] = normalize_class(row[cls_col])
-        if cid_col and row.get(cid_col):
-            case_map[pid] = row[cid_col].strip()
+        pid = _clean_cell(row.get(pid_col))
+        if not pid:
+            continue
+        class_map[pid] = normalize_class(_clean_cell(row.get(cls_col)))
+        if cid_col and _clean_cell(row.get(cid_col)):
+            case_map[pid] = _clean_cell(row.get(cid_col))
 
     return class_map, case_map
+
+
+def load_conversion_labels(
+    csv_path: Optional[Path],
+    dataset_type: str = "generic",
+) -> Tuple[dict, dict, dict, dict]:
+    """Load existing class maps plus optional UKBonn label metadata."""
+    class_map, case_map = load_classifications(csv_path)
+    label_metadata: dict = {}
+    label_summary: dict = {
+        "label_file": str(csv_path) if csv_path else "",
+        "labels_loaded": 0,
+        "label_keys_loaded": 0,
+        "duplicate_label_keys": [],
+        "label_rows": [],
+    }
+
+    if csv_path is None or not csv_path.exists():
+        return class_map, case_map, label_metadata, label_summary
+
+    try:
+        rows = _read_table_rows(csv_path)
+    except Exception:
+        return class_map, case_map, label_metadata, label_summary
+
+    if dataset_type == "ukbonn" or _looks_like_ukbonn_labels(rows):
+        label_metadata, label_summary = load_ukbonn_labels(csv_path)
+
+    return class_map, case_map, label_metadata, label_summary

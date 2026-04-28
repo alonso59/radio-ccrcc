@@ -53,6 +53,48 @@ class _CaseAssigner:
         return cid
 
 
+_UKB_LABEL_DEFAULTS = {
+    "ukb_anonym": "",
+    "ukb_id": "",
+    "manual_label": "",
+    "lb": "",
+    "hb": "",
+    "sn": "",
+    "label_source": "",
+}
+
+
+def _series_root(input_dir: Path, series_dir: str) -> str:
+    """Return the first path component below the input root for duplicate checks."""
+    try:
+        rel = Path(series_dir).resolve().relative_to(input_dir.resolve())
+        return rel.parts[0] if rel.parts else Path(series_dir).name
+    except Exception:
+        parts = Path(series_dir).parts
+        return parts[0] if parts else str(series_dir)
+
+
+def _lookup_patient_map(mapping: dict, pid: str, default: str) -> str:
+    if pid in mapping:
+        return mapping[pid]
+    normalized = du.normalize_patient_key(pid)
+    if normalized in mapping:
+        return mapping[normalized]
+    for key, value in mapping.items():
+        if du.normalize_patient_key(key) == normalized:
+            return value
+    return default
+
+
+def _lookup_ukbonn_label(label_metadata: dict, pid: str) -> dict:
+    if not label_metadata:
+        return dict(_UKB_LABEL_DEFAULTS)
+    label = label_metadata.get(pid) or label_metadata.get(du.normalize_patient_key(pid))
+    if not label:
+        return dict(_UKB_LABEL_DEFAULTS)
+    return {key: label.get(key, "") for key in _UKB_LABEL_DEFAULTS}
+
+
 # ── Discovery + filtering ────────────────────────────────────────────────
 
 def _discover_and_filter(
@@ -69,6 +111,7 @@ def _discover_and_filter(
     raw_series = du.discover_series(input_dir)
 
     patient_series: dict[str, list] = defaultdict(list)
+    patient_roots: dict[str, set[str]] = defaultdict(set)
     skipped: list[dict] = []
     stats: dict[str, dict] = {
         "scan_plane": defaultdict(int),
@@ -89,6 +132,7 @@ def _discover_and_filter(
 
         reader, image, quality = result
         pid, pid_src = du.extract_patient_id(reader, item["directory"])
+        patient_roots[pid].add(_series_root(input_dir, item["directory"]))
         stats["pid_source"][pid_src] += 1
         stats["quality"][quality["severity"]] += 1
 
@@ -125,7 +169,13 @@ def _discover_and_filter(
             "quality": quality,
         })
 
-    return dict(patient_series), skipped, {k: dict(v) for k, v in stats.items()}
+    stats_out = {k: dict(v) for k, v in stats.items()}
+    stats_out["duplicate_patient_ids"] = {
+        pid: sorted(roots)
+        for pid, roots in patient_roots.items()
+        if len(roots) > 1
+    }
+    return dict(patient_series), skipped, stats_out
 
 
 # ── Conversion (flat nifti/ output) ──────────────────────────────────────
@@ -136,6 +186,7 @@ def _convert_patients(
     class_map: dict,
     case_assigner: _CaseAssigner,
     dataset_type: str,
+    label_metadata: Optional[dict] = None,
 ) -> tuple[list, list]:
     """Convert all patients to NIfTI in a single flat *nifti_dir*.
 
@@ -149,13 +200,15 @@ def _convert_patients(
     records: list[dict] = []
     failures: list[dict] = []
     series_counters: dict[str, int] = defaultdict(int)
+    label_metadata = label_metadata or {}
 
     patients = list(patient_series.items())
     pbar = tqdm(patients, desc="Converting", unit="patient")
 
     for pid, series_list in pbar:
         pbar.set_postfix_str(pid[:20])
-        group = class_map.get(pid, "NG")
+        group = _lookup_patient_map(class_map, pid, "NG")
+        ukb_label = _lookup_ukbonn_label(label_metadata, pid)
         case_id = case_assigner.get(pid)
 
         for idx, si in enumerate(series_list):
@@ -164,7 +217,7 @@ def _convert_patients(
                 phase, phase_src = du.detect_protocol(si["reader"], si["path"])
                 scan_plane = du.detect_scan_plane(si["reader"], si["image"])
 
-                md = du.extract_metadata(si["reader"], {
+                context = {
                     "patient_id": pid,
                     "group": group,
                     "scan_idx": idx,
@@ -176,7 +229,9 @@ def _convert_patients(
                     "modality": si["modality"],
                     "spacing_quality": si["quality"]["severity"],
                     "nonuniformity_mm": si["quality"]["nonuniformity_mm"],
-                })
+                }
+                context.update(ukb_label)
+                md = du.extract_metadata(si["reader"], context)
 
                 ras = du.embed_metadata(ras, si["reader"], md)
 
@@ -230,6 +285,13 @@ def _convert_patients(
                     "dataset_type": dataset_type,
                     "output_path": fname,
                     "validation": "ok" if val["valid"] else "warning",
+                    "ukb_anonym": ukb_label.get("ukb_anonym", ""),
+                    "ukb_id": ukb_label.get("ukb_id", ""),
+                    "manual_label": ukb_label.get("manual_label", ""),
+                    "lb": ukb_label.get("lb", ""),
+                    "hb": ukb_label.get("hb", ""),
+                    "sn": ukb_label.get("sn", ""),
+                    "label_source": ukb_label.get("label_source", ""),
                 })
 
             except Exception as exc:
@@ -242,6 +304,45 @@ def _convert_patients(
     return records, failures
 
 
+def _summarize_ukbonn_labels(
+    records: list,
+    label_metadata: Optional[dict],
+    label_summary: Optional[dict],
+) -> dict:
+    label_metadata = label_metadata or {}
+    label_summary = label_summary or {}
+    label_rows = label_summary.get("label_rows", [])
+
+    matched_patient_ids = sorted({
+        r["patient_id"]
+        for r in records
+        if r.get("label_source")
+    })
+    matched_row_ids: set[str] = set()
+    for record in records:
+        if not record.get("label_source"):
+            continue
+        for value in (record.get("ukb_anonym"), record.get("ukb_id"), record.get("patient_id")):
+            label = label_metadata.get(du.normalize_patient_key(value))
+            if label and label.get("_label_row_id"):
+                matched_row_ids.add(label["_label_row_id"])
+
+    unmatched_labels = []
+    for row in label_rows:
+        row_id = f"ukbonn:{row.get('row')}"
+        if row_id not in matched_row_ids:
+            unmatched_labels.append(row)
+
+    return {
+        "ukb_labels_loaded": int(label_summary.get("labels_loaded", 0) or 0),
+        "ukb_label_keys_loaded": int(label_summary.get("label_keys_loaded", 0) or 0),
+        "ukb_label_matched_patients": len(matched_patient_ids),
+        "ukb_label_unmatched_rows": len(unmatched_labels),
+        "ukb_unmatched_labels": unmatched_labels,
+        "ukb_duplicate_label_keys": label_summary.get("duplicate_label_keys", []),
+    }
+
+
 # ── Summary builder ───────────────────────────────────────────────────────
 
 def _build_summary(
@@ -252,6 +353,8 @@ def _build_summary(
     dataset_type: str,
     input_dir: Path,
     output_dir: Path,
+    label_metadata: Optional[dict] = None,
+    label_summary: Optional[dict] = None,
 ) -> dict:
     """Compile a JSON-serialisable summary dict."""
     unique = {r["patient_id"] for r in records}
@@ -260,6 +363,12 @@ def _build_summary(
     for r in records:
         group_dist[r["group"]] += 1
         phase_dist[r["phase"]] += 1
+    duplicate_patient_ids = stats.get("duplicate_patient_ids", {})
+    stat_details = {
+        f"stat_{k}": v
+        for k, v in stats.items()
+        if k != "duplicate_patient_ids"
+    }
 
     return {
         "conversion_date": datetime.now().isoformat(),
@@ -273,7 +382,9 @@ def _build_summary(
         "skipped_series": len(skipped),
         "group_distribution": dict(group_dist),
         "phase_distribution": dict(phase_dist),
-        **{f"stat_{k}": v for k, v in stats.items()},
+        "duplicate_patient_ids": duplicate_patient_ids,
+        **_summarize_ukbonn_labels(records, label_metadata, label_summary),
+        **stat_details,
         "failed_cases": failures,
         "skipped_details": skipped[:100],
     }
@@ -339,8 +450,17 @@ def run(
 
     # 2 ─ Load classifications
     print("[2/5] Loading classifications…")
-    class_map, case_map = du.load_classifications(csv_path)
-    print(f"       → {len(class_map)} patients loaded")
+    class_map, case_map, label_metadata, label_summary = du.load_conversion_labels(
+        csv_path,
+        dataset_type=dataset_type,
+    )
+    if label_summary.get("labels_loaded"):
+        print(
+            f"       → {len(class_map)} class labels, "
+            f"{label_summary['labels_loaded']} UKB label rows loaded"
+        )
+    else:
+        print(f"       → {len(class_map)} patients loaded")
 
     # 3 ─ Discover + filter
     print("[3/5] Discovering & filtering DICOM series…")
@@ -352,14 +472,27 @@ def run(
     print("[4/5] Converting DICOM → NIfTI  (flat output in nifti/)…")
     assigner = _CaseAssigner(case_map, start_case_id)
     records, failures = _convert_patients(
-        patient_series, nifti_dir, class_map, assigner, dataset_type,
+        patient_series,
+        nifti_dir,
+        class_map,
+        assigner,
+        dataset_type,
+        label_metadata=label_metadata,
     )
     print(f"       → {len(records)} converted, {len(failures)} failed")
 
     # 5 ─ Save manifest + summary
     print("[5/5] Saving manifest & summary…")
     summary = _build_summary(
-        records, skipped, failures, stats, dataset_type, input_dir, output_dir,
+        records,
+        skipped,
+        failures,
+        stats,
+        dataset_type,
+        input_dir,
+        output_dir,
+        label_metadata=label_metadata,
+        label_summary=label_summary,
     )
     _save_outputs(records, summary, output_dir)
     print(f"       → {output_dir / 'manifest.csv'}")
